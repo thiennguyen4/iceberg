@@ -1,6 +1,6 @@
 package dev.onemount.iceburg.repository;
 
-import dev.onemount.iceburg.dto.OrderResponse;
+import dev.onemount.iceburg.dto.response.OrderResponse;
 import dev.onemount.iceburg.dto.SnapshotInfo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

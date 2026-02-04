@@ -1,4 +1,4 @@
-package dev.onemount.iceburg.dto;
+package dev.onemount.iceburg.dto.request;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
