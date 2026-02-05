@@ -65,11 +65,7 @@ public class SparkConfig {
                 .set("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
                 .set("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
 
-//                // OpenMetadata Configuration
-//                .set("spark.openmetadata.host", "http://openmetadata:8585")
-//                .set("spark.openmetadata.auth.type", "no-auth")
 
-                // Write Configuration
                 .set("spark.sql.catalog.demo.write.format.default", defaultFileFormat)
                 .set("spark.sql.catalog.demo.write.parquet.compression-codec", parquetCompression);
 

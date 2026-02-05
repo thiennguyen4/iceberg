@@ -89,7 +89,7 @@ services:
       retries: 5
 
   openmetadata-db:
-    image: openmetadata/server:1.4.3
+    image: openmetadata/server:1.11.7
     container_name: openmetadata-db-migrations
     depends_on:
       openmetadata-mysql:
@@ -103,10 +103,10 @@ services:
       DB_USER_PASSWORD: openmetadata
       DB_NAME: openmetadata_db
     entrypoint: /bin/bash
-    command: [ "-c", "sh /opt/openmetadata/bootstrap/bootstrap_storage.sh migrate" ]
+    command: [ "-c", "./bootstrap/openmetadata-ops.sh migrate" ]
 
   openmetadata:
-    image: openmetadata/server:1.4.3
+    image: openmetadata/server:1.11.7
     container_name: openmetadata
     depends_on:
       openmetadata-mysql:
@@ -135,6 +135,8 @@ services:
       OM_MAX_FRAME_SIZE: "10485760"
       SERVER_HOST_API_URL: http://openmetadata:8585/api
       AUTHENTICATION_ENABLED: "false"
+      AUTHORIZER_CLASS_NAME: "org.openmetadata.service.security.NoopAuthorizer"
+      LOG_LEVEL: INFO
     restart: on-failure
 
   openmetadata-elasticsearch:
@@ -144,7 +146,8 @@ services:
       iceberg_net:
     environment:
       - discovery.type=single-node
-      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - action.destructive_requires_name=false
     healthcheck:
       test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s || exit 1" ]
       interval: 10s
@@ -155,7 +158,10 @@ services:
       - openmetadata_es:/usr/share/elasticsearch/data
 
   openmetadata-ingestion:
-    image: openmetadata/ingestion:1.4.3
+#    image: openmetadata/ingestion:1.5.3
+    build:
+      context: .
+      dockerfile: Dockerfile.ingestion
     container_name: openmetadata-ingestion
     depends_on:
       openmetadata:
@@ -165,21 +171,34 @@ services:
     networks:
       - iceberg_net
     environment:
+      AIRFLOW__WEBSERVER__WEB_SERVER_HOST: 0.0.0.0
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+      AIRFLOW__WEBSERVER__SECRET_KEY: openmetadata_secret_key
       OPENMETADATA_SERVER_URL: http://openmetadata:8585/api
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://openmetadata:openmetadata@openmetadata-mysql:3306/openmetadata_db
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
-      metadataApiEndpoint: http://openmetadata:8585/api
-      SERVER_HOST_API_URL: http://openmetadata:8585/api
-      PIPELINE_SERVICE_CLIENT_ENDPOINT: http://openmetadata:8585/api
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
       OPENMETADATA_ELASTICSEARCH_HOST: openmetadata-elasticsearch
     ports:
       - "8080:8080"
     restart: on-failure
     volumes:
       - airflow-dags:/opt/airflow/dags
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin || true &&
       airflow standalone
+      "
+
 
 
 volumes:

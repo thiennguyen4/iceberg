@@ -6,10 +6,9 @@ import dev.onemount.iceburg.dto.response.TableDataResponse;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestTemplate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -17,6 +16,10 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 import static org.apache.spark.sql.functions.*;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
 
 @Slf4j
 @RestController
@@ -27,28 +30,25 @@ public class LineageController {
     private final SparkSession spark;
     private final RestTemplate restTemplate;
 
-    @Value("${openmetadata.api.url}")
-    private String openMetadataApiUrl;
+    @Value("${openmetadata.api.url:http://localhost:8585/api}")
+    private String openMetadataUrl;
 
     @PostMapping("/demo/create-flow")
-    public ResponseEntity<LineageFlowResponse> createDemoLineageFlow(
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+    public ResponseEntity<LineageFlowResponse> createDemoLineageFlow() {
         try {
             createNamespaces();
             createStagingTable();
             transformToProduction();
             createAnalytics();
 
-            publishLineageToOpenMetadata(authHeader);
-
             LineageFlowResponse response = LineageFlowResponse.builder()
                     .success(true)
-                    .message("Lineage flow created successfully")
+                    .message("Tables created successfully! Steps: 1) POST /api/lineage/trigger-ingestion/{serviceName} to sync tables, 2) POST /api/lineage/push-lineage?serviceName={name} to create lineage relationships")
                     .flowDetails(LineageFlowResponse.LineageFlowDetails.builder()
                             .stagingTable("demo.staging.orders")
                             .productionTable("demo.production.orders_clean")
                             .analyticsTable("demo.analytics.daily_summary")
-                            .lineageStatus("Published to OpenMetadata")
+                            .lineageStatus("Tables created. Next: Trigger ingestion, then push lineage metadata")
                             .build())
                     .build();
 
@@ -97,6 +97,233 @@ public class LineageController {
         } catch (Exception e) {
             log.error("Error retrieving lineage data", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    @PostMapping("/trigger-ingestion/{serviceName}")
+    public ResponseEntity<Map<String, Object>> triggerIngestionForService(
+            @PathVariable String serviceName,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        try {
+            log.info("Triggering metadata ingestion for service: {}", serviceName);
+
+            String pipelineName = findIngestionPipeline(serviceName, authHeader);
+
+            if (pipelineName == null) {
+                result.put("success", false);
+                result.put("error", "No ingestion pipeline found for service: " + serviceName);
+                result.put("hint", "Please create an ingestion pipeline in OpenMetadata UI: " +
+                    "Settings → Services → " + serviceName + " → Ingestions → Add Ingestion");
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(result);
+            }
+
+            triggerIngestion(pipelineName, authHeader);
+
+            result.put("success", true);
+            result.put("serviceName", serviceName);
+            result.put("pipelineName", pipelineName);
+            result.put("message", "Ingestion triggered successfully! Tables will appear in OpenMetadata in ~30-60 seconds.");
+            result.put("nextSteps", List.of(
+                "1. Wait 30-60 seconds for ingestion to complete",
+                "2. Go to http://localhost:8585/explore/tables",
+                "3. Search for: demo.staging.orders, demo.production.orders_clean, demo.analytics.daily_summary",
+                "4. Click any table → Lineage tab to see the flow"
+            ));
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("Error triggering ingestion", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+        }
+    }
+
+    @GetMapping("/services")
+    public ResponseEntity<Map<String, Object>> listDatabaseServices(
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        try {
+            HttpHeaders headers = createHeadersFromAuth(authHeader);
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            ResponseEntity<Map> response = restTemplate.exchange(
+                openMetadataUrl + "/v1/services/databaseServices?limit=100",
+                HttpMethod.GET,
+                entity,
+                Map.class
+            );
+
+            Map<String, Object> responseBody = response.getBody();
+            List<Map<String, Object>> services = (List<Map<String, Object>>) responseBody.get("data");
+
+            List<Map<String, String>> simplifiedServices = new ArrayList<>();
+            for (Map<String, Object> service : services) {
+                Map<String, String> serviceInfo = new LinkedHashMap<>();
+                serviceInfo.put("name", (String) service.get("name"));
+                serviceInfo.put("serviceType", (String) service.get("serviceType"));
+                serviceInfo.put("id", (String) service.get("id"));
+                simplifiedServices.add(serviceInfo);
+            }
+
+            result.put("success", true);
+            result.put("services", simplifiedServices);
+            result.put("count", simplifiedServices.size());
+            result.put("hint", "To trigger ingestion, call: POST /api/lineage/trigger-ingestion/{serviceName}");
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("Error listing services", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+        }
+    }
+
+    @GetMapping("/services/{serviceName}/pipelines")
+    public ResponseEntity<Map<String, Object>> getServicePipelines(
+            @PathVariable String serviceName,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        try {
+            HttpHeaders headers = createHeadersFromAuth(authHeader);
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            ResponseEntity<Map> response = restTemplate.exchange(
+                openMetadataUrl + "/v1/services/ingestionPipelines?service=" + serviceName + "&limit=100",
+                HttpMethod.GET,
+                entity,
+                Map.class
+            );
+
+            Map<String, Object> responseBody = response.getBody();
+            List<Map<String, Object>> pipelines = (List<Map<String, Object>>) responseBody.get("data");
+
+            List<Map<String, Object>> simplifiedPipelines = new ArrayList<>();
+            for (Map<String, Object> pipeline : pipelines) {
+                Map<String, Object> pipelineInfo = new LinkedHashMap<>();
+                pipelineInfo.put("name", pipeline.get("name"));
+                pipelineInfo.put("displayName", pipeline.get("displayName"));
+                pipelineInfo.put("pipelineType", pipeline.get("pipelineType"));
+                pipelineInfo.put("fullyQualifiedName", pipeline.get("fullyQualifiedName"));
+                simplifiedPipelines.add(pipelineInfo);
+            }
+
+            result.put("success", true);
+            result.put("serviceName", serviceName);
+            result.put("pipelines", simplifiedPipelines);
+            result.put("count", simplifiedPipelines.size());
+
+            if (simplifiedPipelines.isEmpty()) {
+                result.put("warning", "No ingestion pipeline found. Please create one in OpenMetadata UI.");
+            }
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("Error getting pipelines", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+        }
+    }
+
+    @PostMapping("/refresh-all")
+    public ResponseEntity<Map<String, Object>> refreshAllIcebergServices(
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        List<Map<String, String>> triggered = new ArrayList<>();
+
+        try {
+            HttpHeaders headers = createHeadersFromAuth(authHeader);
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+
+            ResponseEntity<Map> response = restTemplate.exchange(
+                openMetadataUrl + "/v1/services/databaseServices?serviceType=Iceberg&limit=100",
+                HttpMethod.GET,
+                entity,
+                Map.class
+            );
+
+            Map<String, Object> responseBody = response.getBody();
+            List<Map<String, Object>> services = (List<Map<String, Object>>) responseBody.get("data");
+
+            for (Map<String, Object> service : services) {
+                String serviceName = (String) service.get("name");
+                try {
+                    String pipelineName = findIngestionPipeline(serviceName, authHeader);
+                    if (pipelineName != null) {
+                        triggerIngestion(pipelineName, authHeader);
+                        Map<String, String> info = new LinkedHashMap<>();
+                        info.put("service", serviceName);
+                        info.put("pipeline", pipelineName);
+                        info.put("status", "triggered");
+                        triggered.add(info);
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to trigger ingestion for {}: {}", serviceName, e.getMessage());
+                }
+            }
+
+            result.put("success", true);
+            result.put("triggeredCount", triggered.size());
+            result.put("triggeredServices", triggered);
+            result.put("message", "Metadata refresh triggered for " + triggered.size() + " Iceberg service(s)");
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("Error refreshing all services", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
+        }
+    }
+
+    @PostMapping("/push-lineage")
+    public ResponseEntity<Map<String, Object>> pushLineageToOpenMetadata(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestParam(defaultValue = "iceberg-demo") String serviceName) {
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        try {
+            log.info("Pushing lineage edges to OpenMetadata for service: {}", serviceName);
+
+            String stagingFqn = serviceName + ".demo.staging.orders";
+            String productionFqn = serviceName + ".demo.production.orders_clean";
+            String analyticsFqn = serviceName + ".demo.analytics.daily_summary";
+
+            addLineageEdge(authHeader, stagingFqn, productionFqn);
+            Thread.sleep(500);
+
+            addLineageEdge(authHeader, productionFqn, analyticsFqn);
+
+            result.put("success", true);
+            result.put("message", "Lineage edges created successfully!");
+            result.put("edges", List.of(
+                Map.of("from", stagingFqn, "to", productionFqn),
+                Map.of("from", productionFqn, "to", analyticsFqn)
+            ));
+            result.put("nextSteps", List.of(
+                "Go to http://localhost:8585/explore/tables",
+                "Search for any table (staging.orders, orders_clean, daily_summary)",
+                "Click on table → Lineage tab to see the flow"
+            ));
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("Error pushing lineage", e);
+            result.put("success", false);
+            result.put("error", e.getMessage());
+            result.put("hint", "Make sure tables exist in OpenMetadata (run ingestion first) and you have valid token");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(result);
         }
     }
 
@@ -181,82 +408,109 @@ public class LineageController {
                 .build();
     }
 
-    private void publishLineageToOpenMetadata(String authHeader) {
+
+    private String findIngestionPipeline(String serviceName, String authHeader) {
         try {
-            String stagingId = getTableId("iceburg.default.staging.\"staging.orders\"", authHeader);
-            String productionId = getTableId("iceburg.default.production.\"production.orders_clean\"", authHeader);
-            String analyticsId = getTableId("iceburg.default.analytics.\"analytics.daily_summary\"", authHeader);
-
-            if (stagingId == null || productionId == null || analyticsId == null) {
-                log.warn("Some tables not found in OpenMetadata. Skipping lineage publishing.");
-                return;
-            }
-
-            addLineageEdge(stagingId, productionId, authHeader);
-            addLineageEdge(productionId, analyticsId, authHeader);
-
-            log.info("Lineage published successfully");
-
-        } catch (Exception e) {
-            log.error("Failed to publish lineage to OpenMetadata", e);
-        }
-    }
-
-    private String getTableId(String tableName, String authHeader) {
-        try {
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                log.warn("Invalid or missing Authorization header");
-                return null;
-            }
-
-            String token = authHeader.substring(7);
-            String url = openMetadataApiUrl + "/v1/tables/name/" + tableName;
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(token);
-
+            HttpHeaders headers = createHeadersFromAuth(authHeader);
             HttpEntity<String> entity = new HttpEntity<>(headers);
+
             ResponseEntity<Map> response = restTemplate.exchange(
-                    url, HttpMethod.GET, entity, Map.class
+                openMetadataUrl + "/v1/services/ingestionPipelines?service=" + serviceName + "&pipelineType=metadata&limit=10",
+                HttpMethod.GET,
+                entity,
+                Map.class
             );
 
-            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
-                return (String) response.getBody().get("id");
+            Map<String, Object> responseBody = response.getBody();
+            List<Map<String, Object>> pipelines = (List<Map<String, Object>>) responseBody.get("data");
+
+            if (pipelines != null && !pipelines.isEmpty()) {
+                return (String) pipelines.get(0).get("fullyQualifiedName");
             }
+
+            return null;
+
         } catch (Exception e) {
-            log.debug("Table not found: {}", tableName);
+            log.error("Error finding ingestion pipeline for service: {}", serviceName, e);
+            return null;
         }
-        return null;
     }
 
-    private void addLineageEdge(String fromId, String toId, String authHeader) {
+    private void triggerIngestion(String pipelineFullyQualifiedName) {
+        triggerIngestion(pipelineFullyQualifiedName, null);
+    }
+
+    private void triggerIngestion(String pipelineFullyQualifiedName, String authHeader) {
         try {
-            if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-                log.warn("Invalid or missing Authorization header for lineage edge");
-                return;
-            }
+            HttpHeaders headers = createHeadersFromAuth(authHeader);
+            HttpEntity<String> entity = new HttpEntity<>("{}", headers);
 
-            String token = authHeader.substring(7);
-            String url = openMetadataApiUrl + "/v1/lineage";
-
-            Map<String, Object> payload = Map.of(
-                    "edge", Map.of(
-                            "fromEntity", Map.of("id", fromId, "type", "table"),
-                            "toEntity", Map.of("id", toId, "type", "table"),
-                            "lineageDetails", Map.of("sqlQuery", "")
-                    )
+            restTemplate.exchange(
+                openMetadataUrl + "/v1/services/ingestionPipelines/trigger/" + pipelineFullyQualifiedName,
+                HttpMethod.POST,
+                entity,
+                String.class
             );
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(token);
-
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(payload, headers);
-            restTemplate.exchange(url, HttpMethod.PUT, entity, String.class);
+            log.info("Successfully triggered ingestion pipeline: {}", pipelineFullyQualifiedName);
 
         } catch (Exception e) {
-            log.error("Failed to create lineage edge: {} -> {}", fromId, toId, e);
+            log.error("Error triggering ingestion pipeline: {}", pipelineFullyQualifiedName, e);
+            throw new RuntimeException("Failed to trigger ingestion: " + e.getMessage(), e);
+        }
+    }
+
+    private HttpHeaders createHeadersFromAuth(String authHeader) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        String token = null;
+
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            token = authHeader.substring(7);
+        } else if (authHeader != null && !authHeader.isEmpty()) {
+            token = authHeader;
+        }
+
+        if (token != null && !token.isEmpty()) {
+            headers.set("Authorization", "Bearer " + token);
+        }
+
+        return headers;
+    }
+
+    private void addLineageEdge(String authHeader, String fromTableFqn, String toTableFqn) {
+        try {
+            String lineagePayload = String.format("""
+                {
+                  "edge": {
+                    "fromEntity": {
+                      "id": "%s",
+                      "type": "table"
+                    },
+                    "toEntity": {
+                      "id": "%s",
+                      "type": "table"
+                    }
+                  }
+                }
+                """, fromTableFqn, toTableFqn);
+
+            HttpHeaders headers = createHeadersFromAuth(authHeader);
+            HttpEntity<String> entity = new HttpEntity<>(lineagePayload, headers);
+
+            restTemplate.exchange(
+                openMetadataUrl + "/v1/lineage",
+                HttpMethod.PUT,
+                entity,
+                String.class
+            );
+
+            log.info("Added lineage edge: {} -> {}", fromTableFqn, toTableFqn);
+
+        } catch (Exception e) {
+            log.error("Error adding lineage edge: {}", e.getMessage());
+            throw new RuntimeException("Failed to add lineage: " + e.getMessage(), e);
         }
     }
 }
