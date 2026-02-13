@@ -2,4 +2,4 @@ FROM openmetadata/ingestion:1.11.7
 
 USER airflow
 
-RUN pip install --no-cache-dir "openmetadata-ingestion[iceberg]==1.11.7"
+RUN pip install --no-cache-dir "openmetadata-ingestion[iceberg]==1.11.7" requests

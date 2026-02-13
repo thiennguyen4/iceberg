@@ -2,6 +2,8 @@ package dev.onemount.iceburg.controller;
 
 import dev.onemount.iceburg.dto.response.LineageDataResponse;
 import dev.onemount.iceburg.dto.response.LineageFlowResponse;
+import dev.onemount.iceburg.dto.response.MarquezLineageResponse;
+import dev.onemount.iceburg.repository.LineageTableRepository;
 import dev.onemount.iceburg.service.LineageService;
 import dev.onemount.iceburg.service.OpenMetadataService;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,7 @@ public class LineageController {
 
     private final LineageService lineageService;
     private final OpenMetadataService openMetadataService;
+    private final LineageTableRepository lineageTableRepository;
 
     @PostMapping("/demo/create-flow")
     public ResponseEntity<LineageFlowResponse> createDemoLineageFlow(
@@ -131,6 +134,38 @@ public class LineageController {
             error.put("success", false);
             error.put("error", e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+
+    @PostMapping("/auto-lineage")
+    public ResponseEntity<MarquezLineageResponse> runAutoLineage() {
+        try {
+            lineageTableRepository.createNamespaces();
+            lineageTableRepository.createStagingTable();
+            lineageTableRepository.transformToProduction();
+            lineageTableRepository.createAnalytics();
+
+            MarquezLineageResponse response = MarquezLineageResponse.builder()
+                    .success(true)
+                    .message("Spark operations completed. Lineage captured automatically by OpenLineage.")
+                    .marquezUrl("http://localhost:3000")
+                    .jobName("iceberg_lineage_job")
+                    .capturedEvents(List.of(
+                            "Table Creation Events",
+                            "Data Transformation Events",
+                            "Write Operations"
+                    ))
+                    .build();
+
+            return ResponseEntity.ok(response);
+
+        } catch (Exception e) {
+            log.error("Error running auto lineage", e);
+            MarquezLineageResponse errorResponse = MarquezLineageResponse.builder()
+                    .success(false)
+                    .message("Failed: " + e.getMessage())
+                    .build();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
         }
     }
 }

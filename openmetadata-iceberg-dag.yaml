@@ -1,0 +1,40 @@
+source:
+  type: Iceberg
+  serviceName: iceberg-rest-catalog
+  serviceConnection:
+    config:
+      type: Iceberg
+      catalog:
+        name: rest
+        uri: http://rest:8181
+        warehouse: s3://warehouse/
+      fileSystem:
+        securityConfig:
+          awsAccessKeyId: admin
+          awsSecretAccessKey: password
+          awsRegion: us-east-1
+        endPointURL: http://minio:9000
+  sourceConfig:
+    config:
+      type: DatabaseMetadata
+      markDeletedTables: true
+      includeTables: true
+      includeViews: true
+      databaseFilterPattern:
+        includes:
+          - ".*"
+      schemaFilterPattern:
+        includes:
+          - ".*"
+      tableFilterPattern:
+        includes:
+          - ".*"
+sink:
+  type: metadata-rest
+  config: {}
+  createServiceIfNotExists: true
+workflowConfig:
+  loggerLevel: INFO
+  openMetadataServerConfig:
+    hostPort: http://openmetadata:8585/api
+    authProvider: no-auth

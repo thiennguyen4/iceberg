@@ -1,5 +1,6 @@
 package dev.onemount.iceburg.repository;
 
+import dev.onemount.iceburg.config.IcebergTableConfig;
 import dev.onemount.iceburg.dto.response.OrderResponse;
 import dev.onemount.iceburg.dto.SnapshotInfo;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ import java.util.Map;
 public class SparkOrderRepository implements OrderRepository {
 
     private final SparkSession sparkSession;
+    private final IcebergTableConfig icebergTableConfig;
 
     private static final String NAMESPACE = "sales";
     private static final String TABLE_NAME = "orders";
@@ -51,13 +53,14 @@ public class SparkOrderRepository implements OrderRepository {
                         "  quantity INT," +
                         "  price DECIMAL(10,2)," +
                         "  order_timestamp TIMESTAMP" +
-                        ") USING iceberg",
-                FULL_TABLE_NAME
+                        ") USING iceberg %s",
+                FULL_TABLE_NAME,
+                icebergTableConfig.getTableProperties()
         );
 
         log.debug("Executing SQL: {}", createTableSql);
         sparkSession.sql(createTableSql);
-        log.info("Table '{}' ensured to exist", FULL_TABLE_NAME);
+        log.info("Table '{}' ensured to exist with format: {}", FULL_TABLE_NAME, icebergTableConfig.getWriteFormat());
     }
 
     @Override
@@ -400,5 +403,251 @@ public class SparkOrderRepository implements OrderRepository {
             log.error("Error expiring snapshots with hybrid strategy", e);
             throw new RuntimeException("Failed to expire snapshots with hybrid strategy", e);
         }
+    }
+
+    @Override
+    public Map<String, Object> generateBulkData(int rowCount, int batchSize) {
+        long startTime = System.currentTimeMillis();
+
+        try {
+            log.info("Starting bulk data generation: {} rows with batch size {}", rowCount, batchSize);
+
+            ensureNamespaceExists();
+            ensureTableExists();
+
+            String generateSql = String.format(
+                "INSERT INTO %s " +
+                "SELECT " +
+                "  CONCAT('ORD-', LPAD(CAST(id AS STRING), 10, '0')) as order_id, " +
+                "  CONCAT('CUST-', LPAD(CAST((id %% 10000) AS STRING), 6, '0')) as customer_id, " +
+                "  CASE (id %% 10) " +
+                "    WHEN 0 THEN 'Laptop' " +
+                "    WHEN 1 THEN 'Smartphone' " +
+                "    WHEN 2 THEN 'Tablet' " +
+                "    WHEN 3 THEN 'Monitor' " +
+                "    WHEN 4 THEN 'Keyboard' " +
+                "    WHEN 5 THEN 'Mouse' " +
+                "    WHEN 6 THEN 'Headphones' " +
+                "    WHEN 7 THEN 'Webcam' " +
+                "    WHEN 8 THEN 'Speaker' " +
+                "    ELSE 'Charger' " +
+                "  END as product_name, " +
+                "  CAST((id %% 10 + 1) AS INT) as quantity, " +
+                "  CAST(((id %% 1000 + 100) * 1.99) AS DECIMAL(10,2)) as price, " +
+                "  TIMESTAMP(DATE_ADD(CURRENT_DATE(), -CAST((id %% 365) AS INT))) as order_timestamp " +
+                "FROM RANGE(%d)",
+                FULL_TABLE_NAME,
+                rowCount
+            );
+
+            log.info("Executing bulk insert SQL");
+            sparkSession.sql(generateSql);
+
+            long endTime = System.currentTimeMillis();
+            long executionTime = endTime - startTime;
+
+            Long snapshotId = getLatestSnapshotId();
+
+            String location = "s3://warehouse/" + NAMESPACE + "/" + TABLE_NAME;
+
+            long totalSize = 0;
+            try {
+                String filesSql = String.format(
+                    "SELECT SUM(file_size_in_bytes) as total_size FROM %s.files",
+                    FULL_TABLE_NAME
+                );
+                Dataset<Row> filesDs = sparkSession.sql(filesSql);
+                if (!filesDs.isEmpty() && !filesDs.first().isNullAt(0)) {
+                    totalSize = filesDs.first().getLong(0);
+                }
+            } catch (Exception e) {
+                log.warn("Could not calculate total file size: {}", e.getMessage());
+            }
+
+            Map<String, Object> result = new java.util.HashMap<>();
+            result.put("rowsGenerated", (long) rowCount);
+            result.put("snapshotId", snapshotId);
+            result.put("executionTimeMs", executionTime);
+            result.put("storageLocation", location);
+            result.put("fileSizeBytes", totalSize);
+
+            log.info("Bulk data generation completed: {} rows in {} ms", rowCount, executionTime);
+
+            return result;
+
+        } catch (Exception e) {
+            log.error("Error generating bulk data", e);
+            throw new RuntimeException("Failed to generate bulk data", e);
+        }
+    }
+
+    @Override
+    public Map<String, Object> benchmarkFullTableScan(int iterations, boolean warmup) {
+        List<Long> executionTimes = new ArrayList<>();
+
+        try {
+            if (warmup) {
+                log.info("Performing warmup query...");
+                sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", FULL_TABLE_NAME)).collect();
+            }
+
+            String querySql = String.format("SELECT * FROM %s", FULL_TABLE_NAME);
+            long totalRows = 0;
+
+            for (int i = 0; i < iterations; i++) {
+                long startTime = System.currentTimeMillis();
+
+                Dataset<Row> result = sparkSession.sql(querySql);
+                long count = result.count();
+
+                long endTime = System.currentTimeMillis();
+                long executionTime = endTime - startTime;
+                executionTimes.add(executionTime);
+
+                if (i == 0) {
+                    totalRows = count;
+                }
+
+                log.info("Iteration {}: {} rows in {} ms", i + 1, count, executionTime);
+            }
+
+            return buildBenchmarkResult(executionTimes, totalRows, totalRows,
+                "Full table scan - SELECT * FROM " + FULL_TABLE_NAME);
+
+        } catch (Exception e) {
+            log.error("Error during full table scan benchmark", e);
+            throw new RuntimeException("Failed to benchmark full table scan", e);
+        }
+    }
+
+    @Override
+    public Map<String, Object> benchmarkFilteredQuery(String customerId, String productName,
+                                                      int iterations, boolean warmup) {
+        List<Long> executionTimes = new ArrayList<>();
+
+        try {
+            if (warmup) {
+                log.info("Performing warmup query...");
+                String warmupSql = String.format(
+                    "SELECT * FROM %s WHERE customer_id = '%s' AND product_name = '%s'",
+                    FULL_TABLE_NAME, customerId, productName
+                );
+                sparkSession.sql(warmupSql).collect();
+            }
+
+            String querySql = String.format(
+                "SELECT * FROM %s WHERE customer_id = '%s' AND product_name = '%s'",
+                FULL_TABLE_NAME, customerId, productName
+            );
+
+            long totalRowsScanned = sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", FULL_TABLE_NAME))
+                .first().getLong(0);
+            long filteredRows = 0;
+
+            for (int i = 0; i < iterations; i++) {
+                long startTime = System.currentTimeMillis();
+
+                Dataset<Row> result = sparkSession.sql(querySql);
+                long count = result.count();
+
+                long endTime = System.currentTimeMillis();
+                long executionTime = endTime - startTime;
+                executionTimes.add(executionTime);
+
+                if (i == 0) {
+                    filteredRows = count;
+                }
+
+                log.info("Iteration {}: {} rows filtered in {} ms", i + 1, count, executionTime);
+            }
+
+            return buildBenchmarkResult(executionTimes, totalRowsScanned, filteredRows,
+                String.format("Filtered query - WHERE customer_id='%s' AND product_name='%s'",
+                    customerId, productName));
+
+        } catch (Exception e) {
+            log.error("Error during filtered query benchmark", e);
+            throw new RuntimeException("Failed to benchmark filtered query", e);
+        }
+    }
+
+    @Override
+    public Map<String, Object> benchmarkAggregationQuery(int iterations, boolean warmup) {
+        List<Long> executionTimes = new ArrayList<>();
+
+        try {
+            if (warmup) {
+                log.info("Performing warmup query...");
+                sparkSession.sql(String.format(
+                    "SELECT product_name, COUNT(*) as count, SUM(quantity) as total_qty, AVG(price) as avg_price FROM %s GROUP BY product_name",
+                    FULL_TABLE_NAME
+                )).collect();
+            }
+
+            String querySql = String.format(
+                "SELECT product_name, COUNT(*) as order_count, " +
+                "SUM(quantity) as total_quantity, " +
+                "AVG(price) as avg_price, " +
+                "MIN(price) as min_price, " +
+                "MAX(price) as max_price " +
+                "FROM %s GROUP BY product_name ORDER BY order_count DESC",
+                FULL_TABLE_NAME
+            );
+
+            long totalRowsScanned = sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", FULL_TABLE_NAME))
+                .first().getLong(0);
+            long resultRows = 0;
+
+            for (int i = 0; i < iterations; i++) {
+                long startTime = System.currentTimeMillis();
+
+                Dataset<Row> result = sparkSession.sql(querySql);
+                long count = result.count();
+
+                long endTime = System.currentTimeMillis();
+                long executionTime = endTime - startTime;
+                executionTimes.add(executionTime);
+
+                if (i == 0) {
+                    resultRows = count;
+                }
+
+                log.info("Iteration {}: {} groups aggregated in {} ms", i + 1, count, executionTime);
+            }
+
+            return buildBenchmarkResult(executionTimes, totalRowsScanned, resultRows,
+                "Aggregation query - GROUP BY product_name with COUNT, SUM, AVG, MIN, MAX");
+
+        } catch (Exception e) {
+            log.error("Error during aggregation query benchmark", e);
+            throw new RuntimeException("Failed to benchmark aggregation query", e);
+        }
+    }
+
+    private Map<String, Object> buildBenchmarkResult(List<Long> executionTimes, long rowsScanned,
+                                                     long rowsReturned, String queryDetails) {
+        Map<String, Object> result = new java.util.HashMap<>();
+
+        executionTimes.sort(Long::compareTo);
+
+        long min = executionTimes.get(0);
+        long max = executionTimes.get(executionTimes.size() - 1);
+        long sum = executionTimes.stream().mapToLong(Long::longValue).sum();
+        long avg = sum / executionTimes.size();
+        long median = executionTimes.get(executionTimes.size() / 2);
+
+        double throughput = rowsScanned > 0 && avg > 0 ? (rowsScanned * 1000.0 / avg) : 0.0;
+
+        result.put("executionTimes", executionTimes);
+        result.put("minExecutionTimeMs", min);
+        result.put("maxExecutionTimeMs", max);
+        result.put("avgExecutionTimeMs", avg);
+        result.put("medianExecutionTimeMs", median);
+        result.put("totalRowsScanned", rowsScanned);
+        result.put("totalRowsReturned", rowsReturned);
+        result.put("throughputRowsPerSecond", throughput);
+        result.put("queryDetails", queryDetails);
+
+        return result;
     }
 }

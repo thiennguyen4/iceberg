@@ -2,9 +2,7 @@ package dev.onemount.iceburg.controller;
 
 import dev.onemount.iceburg.dto.*;
 import dev.onemount.iceburg.dto.request.*;
-import dev.onemount.iceburg.dto.response.CreateOrderResponse;
-import dev.onemount.iceburg.dto.response.ExpireSnapshotsResponse;
-import dev.onemount.iceburg.dto.response.OrderResponse;
+import dev.onemount.iceburg.dto.response.*;
 import dev.onemount.iceburg.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -240,6 +238,104 @@ public class OrderController {
             log.error("Error expiring snapshots with hybrid strategy", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new ExpireSnapshotsResponse("Failed to expire snapshots: " + e.getMessage(), 0, 0));
+        }
+    }
+
+    @PostMapping("/generate-bulk-data")
+    public ResponseEntity<GenerateBulkDataResponse> generateBulkData(@RequestBody GenerateBulkDataRequest request) {
+        log.info("Received bulk data generation request: {} rows",
+                request.getRowCount() != null ? request.getRowCount() : 1000000);
+        try {
+            GenerateBulkDataResponse response = orderService.generateBulkData(request);
+
+            if (response.getSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
+        } catch (Exception e) {
+            log.error("Error generating bulk data", e);
+            GenerateBulkDataResponse errorResponse = GenerateBulkDataResponse.builder()
+                    .success(false)
+                    .message("Failed to generate bulk data: " + e.getMessage())
+                    .build();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
+        }
+    }
+
+    @PostMapping("/batch-parallel")
+    public ResponseEntity<ParallelBatchOrderResponse> parallelBatchIngestOrders(
+            @RequestBody ParallelBatchOrderRequest request) {
+        log.info("Received parallel batch ingest request: {} orders with {} threads",
+                request.getOrders().size(),
+                request.getNumberOfThreads() != null ? request.getNumberOfThreads() : 4);
+        try {
+            ParallelBatchOrderResponse response = orderService.parallelBatchIngestOrders(request);
+
+            if (response.getSuccess()) {
+                return ResponseEntity.ok(response);
+            } else {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+            }
+        } catch (Exception e) {
+            log.error("Error during parallel batch ingestion", e);
+            ParallelBatchOrderResponse errorResponse = ParallelBatchOrderResponse.builder()
+                    .success(false)
+                    .message("Failed to parallel batch ingest orders: " + e.getMessage())
+                    .build();
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(errorResponse);
+        }
+    }
+
+    @PostMapping("/benchmark/full-scan")
+    public ResponseEntity<QueryBenchmarkResponse> benchmarkFullTableScan(
+            @RequestBody(required = false) QueryBenchmarkRequest request) {
+        if (request == null) {
+            request = new QueryBenchmarkRequest();
+        }
+        log.info("Received full table scan benchmark request: {} iterations", request.getIterations());
+
+        try {
+            QueryBenchmarkResponse response = orderService.benchmarkFullTableScan(request);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error during full table scan benchmark", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    @PostMapping("/benchmark/filtered-query")
+    public ResponseEntity<QueryBenchmarkResponse> benchmarkFilteredQuery(
+            @RequestBody(required = false) QueryBenchmarkRequest request) {
+        if (request == null) {
+            request = new QueryBenchmarkRequest();
+        }
+        log.info("Received filtered query benchmark request: customerId={}, productName={}",
+                request.getCustomerId(), request.getProductName());
+
+        try {
+            QueryBenchmarkResponse response = orderService.benchmarkFilteredQuery(request);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error during filtered query benchmark", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+
+    @PostMapping("/benchmark/aggregation")
+    public ResponseEntity<QueryBenchmarkResponse> benchmarkAggregationQuery(
+            @RequestBody(required = false) QueryBenchmarkRequest request) {
+        if (request == null) {
+            request = new QueryBenchmarkRequest();
+        }
+        log.info("Received aggregation query benchmark request: {} iterations", request.getIterations());
+
+        try {
+            QueryBenchmarkResponse response = orderService.benchmarkAggregationQuery(request);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("Error during aggregation query benchmark", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
 }

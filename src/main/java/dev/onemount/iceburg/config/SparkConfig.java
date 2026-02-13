@@ -31,12 +31,6 @@ public class SparkConfig {
     @Value("${spark.sql.catalog.demo.s3.secret-access-key}")
     private String s3SecretKey;
 
-    @Value("${spark.sql.catalog.demo.write.format.default:parquet}")
-    private String defaultFileFormat;
-
-    @Value("${spark.sql.catalog.demo.write.parquet.compression-codec:zstd}")
-    private String parquetCompression;
-
     @Bean
     public SparkSession sparkSession() {
         SparkConf conf = new SparkConf()
@@ -49,25 +43,35 @@ public class SparkConfig {
                 .set("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
                 .set("spark.sql.catalog.demo.type", "rest")
                 .set("spark.sql.catalog.demo.uri", catalogUri)
-                .set("spark.sql.catalog.demo.warehouse", warehouse)
-                .set("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+                .set("spark.sql.catalog.demo.warehouse", warehouse) // Point to S3 bucket
+                .set("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") // Use S3FileIO for S3 access
+
+                // S3 Configuration for Iceberg
                 .set("spark.sql.catalog.demo.s3.endpoint", s3Endpoint)
                 .set("spark.sql.catalog.demo.s3.access-key-id", s3AccessKey)
                 .set("spark.sql.catalog.demo.s3.secret-access-key", s3SecretKey)
                 .set("spark.sql.catalog.demo.s3.path-style-access", "true")
+
+                // Set default catalog
                 .set("spark.sql.defaultCatalog", "demo")
 
-                // S3A Configuration
+                // S3 Configuration for Spark
                 .set("spark.hadoop.fs.s3a.endpoint", s3Endpoint)
                 .set("spark.hadoop.fs.s3a.access.key", s3AccessKey)
                 .set("spark.hadoop.fs.s3a.secret.key", s3SecretKey)
                 .set("spark.hadoop.fs.s3a.path.style.access", "true")
                 .set("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-                .set("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+                .set("spark.hadoop.fs.s3a.connection.ssl.enabled", "false");
 
-
-                .set("spark.sql.catalog.demo.write.format.default", defaultFileFormat)
-                .set("spark.sql.catalog.demo.write.parquet.compression-codec", parquetCompression);
+                // OpenLineage Configuration
+//                .set("spark.extraListeners", "io.openlineage.spark.agent.OpenLineageSparkListener")
+//                .set("spark.openlineage.transport.type", "http")
+//                .set("spark.openlineage.transport.url", "http://localhost:5000")
+//                .set("spark.openlineage.namespace", "iceberg_demo")
+//                .set("spark.openlineage.parentJobNamespace", "iceberg_demo")
+//                .set("spark.openlineage.parentJobName", "iceberg_lineage_job")
+//                .set("spark.openlineage.facets.disabled", "[]")
+//                .set("spark.openlineage.debugFacet", "disabled");
 
 
         return SparkSession.builder()

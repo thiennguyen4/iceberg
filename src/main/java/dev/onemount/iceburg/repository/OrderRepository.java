@@ -45,4 +45,12 @@ public interface OrderRepository {
     int expireSnapshotsByCount(int retainLast);
 
     int expireSnapshotsHybrid(String olderThanTimestamp, int retainLast);
+
+    Map<String, Object> generateBulkData(int rowCount, int batchSize);
+
+    Map<String, Object> benchmarkFullTableScan(int iterations, boolean warmup);
+
+    Map<String, Object> benchmarkFilteredQuery(String customerId, String productName, int iterations, boolean warmup);
+
+    Map<String, Object> benchmarkAggregationQuery(int iterations, boolean warmup);
 }

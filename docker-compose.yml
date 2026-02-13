@@ -33,6 +33,7 @@ services:
       - CATALOG_WAREHOUSE=s3://warehouse/
       - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
       - CATALOG_S3_ENDPOINT=http://minio:9000
+
   minio:
     image: minio/minio
     container_name: minio
@@ -187,6 +188,8 @@ services:
     restart: on-failure
     volumes:
       - airflow-dags:/opt/airflow/dags
+      - ./openmetadata-iceberg-dag.yaml:/tmp/iceberg-ingestion.yaml
+      - ./init_iceberg_service.py:/tmp/init_iceberg_service.py
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
       interval: 30s
@@ -197,13 +200,72 @@ services:
       bash -c "
       airflow db migrate &&
       airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin || true &&
+      (sleep 90 && python /tmp/init_iceberg_service.py &) &&
       airflow standalone
       "
+
+  marquez:
+    image: marquezproject/marquez:latest
+    container_name: marquez
+    ports:
+      - "5002:5000"
+      - "5003:5001"
+    networks:
+      iceberg_net:
+    environment:
+      - MARQUEZ_PORT=5000
+      - MARQUEZ_ADMIN_PORT=5001
+      - POSTGRES_HOST=marquez-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=marquez
+      - POSTGRES_USER=marquez
+      - POSTGRES_PASSWORD=marquez
+    depends_on:
+      - marquez-db
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5001/healthcheck" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  marquez-db:
+    image: postgres:14
+    container_name: marquez-db
+    ports:
+      - "5432:5432"
+    networks:
+      iceberg_net:
+    environment:
+      - POSTGRES_USER=marquez
+      - POSTGRES_PASSWORD=marquez
+      - POSTGRES_DB=marquez
+    volumes:
+      - marquez_db:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U marquez" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  marquez-web:
+    image: marquezproject/marquez-web:latest
+    container_name: marquez-web
+    ports:
+      - "3000:3000"
+    networks:
+      iceberg_net:
+    environment:
+      - WEB_PORT=3000
+      - MARQUEZ_HOST=marquez
+      - MARQUEZ_PORT=5000
+    depends_on:
+      - marquez
 
 volumes:
   openmetadata_mysql:
   openmetadata_es:
   airflow-dags:
+  marquez_db:
 
 networks:
   iceberg_net:
