@@ -3,3 +3,6 @@ FROM openmetadata/ingestion:1.11.7
 USER airflow
 
 RUN pip install --no-cache-dir "openmetadata-ingestion[iceberg]==1.11.7" requests
+
+COPY --chown=airflow:airflow marquez_lineage_sync_dag.py /opt/airflow/dags/
+

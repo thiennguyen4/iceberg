@@ -51,27 +51,19 @@ public class SparkConfig {
                 .set("spark.sql.catalog.demo.s3.access-key-id", s3AccessKey)
                 .set("spark.sql.catalog.demo.s3.secret-access-key", s3SecretKey)
                 .set("spark.sql.catalog.demo.s3.path-style-access", "true")
-
-                // Set default catalog
                 .set("spark.sql.defaultCatalog", "demo")
-
-                // S3 Configuration for Spark
                 .set("spark.hadoop.fs.s3a.endpoint", s3Endpoint)
                 .set("spark.hadoop.fs.s3a.access.key", s3AccessKey)
                 .set("spark.hadoop.fs.s3a.secret.key", s3SecretKey)
                 .set("spark.hadoop.fs.s3a.path.style.access", "true")
                 .set("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-                .set("spark.hadoop.fs.s3a.connection.ssl.enabled", "false");
-
-                // OpenLineage Configuration
-//                .set("spark.extraListeners", "io.openlineage.spark.agent.OpenLineageSparkListener")
-//                .set("spark.openlineage.transport.type", "http")
-//                .set("spark.openlineage.transport.url", "http://localhost:5000")
-//                .set("spark.openlineage.namespace", "iceberg_demo")
-//                .set("spark.openlineage.parentJobNamespace", "iceberg_demo")
-//                .set("spark.openlineage.parentJobName", "iceberg_lineage_job")
-//                .set("spark.openlineage.facets.disabled", "[]")
-//                .set("spark.openlineage.debugFacet", "disabled");
+                .set("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
+                .set("spark.extraListeners", "io.openlineage.spark.agent.OpenLineageSparkListener")
+                .set("spark.openlineage.transport.type", "http")
+                .set("spark.openlineage.transport.url", "http://localhost:5002")
+                .set("spark.openlineage.namespace", "iceberg_demo")
+                .set("spark.openlineage.parentJobNamespace", "iceberg_demo")
+                .set("spark.openlineage.parentJobName", "iceberg_lineage_job");
 
 
         return SparkSession.builder()
