@@ -248,12 +248,56 @@ services:
       (sleep 60 && python /tmp/init_iceberg_service.py &) &&
       airflow standalone
       "
+  dremio:
+    image: dremio/dremio-oss:latest
+    container_name: dremio
+    networks:
+      iceberg_net:
+    ports:
+      - "9047:9047"
+      - "31010:31010"
+      - "45678:45678"
+    volumes:
+      - dremio-data:/opt/dremio/data
+    environment:
+      - DREMIO_MAX_MEMORY_SIZE_MB=4096
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9047" ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  cube:
+    image: cubejs/cube:latest
+    container_name: cube
+    networks:
+      iceberg_net:
+    ports:
+      - "4000:4000"
+    depends_on:
+      dremio:
+        condition: service_healthy
+    environment:
+      - CUBEJS_DB_TYPE=dremio
+      - CUBEJS_DB_HOST=dremio
+      - CUBEJS_DB_PORT=9047
+      - CUBEJS_DB_USER=admin
+      - CUBEJS_DB_PASS=dremio123
+      - CUBEJS_API_SECRET=demo_secret_key_cube_dremio_2026
+      - CUBEJS_DEV_MODE=true
+      - CUBEJS_WEB_SOCKETS=true
+      - CUBEJS_TELEMETRY=false
+      - CUBEJS_SCHEMA_PATH=model
+      - NODE_ENV=development
+    volumes:
+      - ./cube/schema:/cube/conf/model
 
 volumes:
   openmetadata_mysql:
   openmetadata_es:
   airflow-dags:
   marquez-db:
+  dremio-data:
 
 networks:
   iceberg_net:
