@@ -8,6 +8,9 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class IcebergTableConfig {
 
+    @Value("${catalog.active:demo}")
+    private String activeCatalog;
+
     @Value("${iceberg.table.write.format.default:avro}")
     private String writeFormat;
 

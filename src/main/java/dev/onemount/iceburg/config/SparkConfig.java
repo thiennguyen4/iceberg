@@ -31,6 +31,15 @@ public class SparkConfig {
     @Value("${spark.sql.catalog.demo.s3.secret-access-key}")
     private String s3SecretKey;
 
+    @Value("${nessie.catalog.uri}")
+    private String nessieCatalogUri;
+
+    @Value("${nessie.catalog.ref}")
+    private String nessieCatalogRef;
+
+    @Value("${nessie.catalog.warehouse}")
+    private String nessieCatalogWarehouse;
+
     @Bean
     public SparkSession sparkSession() {
         SparkConf conf = new SparkConf()
@@ -39,7 +48,10 @@ public class SparkConfig {
                 .set("spark.ui.enabled", "false")
 
                 // Iceberg Configuration
-                .set("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+//                .set("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+                .set("spark.sql.extensions",
+                        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions," +
+                                "org.projectnessie.spark.extensions.NessieSparkSessionExtensions")
                 .set("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
                 .set("spark.sql.catalog.demo.type", "rest")
                 .set("spark.sql.catalog.demo.uri", catalogUri)
@@ -63,7 +75,21 @@ public class SparkConfig {
                 .set("spark.openlineage.transport.url", "http://localhost:5002")
                 .set("spark.openlineage.namespace", "iceberg_demo")
                 .set("spark.openlineage.parentJobNamespace", "iceberg_demo")
-                .set("spark.openlineage.parentJobName", "iceberg_lineage_job");
+                .set("spark.openlineage.parentJobName", "iceberg_lineage_job")
+
+                // Nessie Catalog
+                .set("spark.sql.catalog.nessie", "org.apache.iceberg.spark.SparkCatalog")
+                .set("spark.sql.catalog.nessie.catalog-impl", "org.apache.iceberg.nessie.NessieCatalog")
+                .set("spark.sql.catalog.nessie.uri", nessieCatalogUri)
+                .set("spark.sql.catalog.nessie.ref", nessieCatalogRef)
+                .set("spark.sql.catalog.nessie.warehouse", nessieCatalogWarehouse)
+                .set("spark.sql.catalog.nessie.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+                .set("spark.sql.catalog.nessie.s3.endpoint", s3Endpoint)
+                .set("spark.sql.catalog.nessie.s3.access-key-id", s3AccessKey)
+                .set("spark.sql.catalog.nessie.s3.secret-access-key", s3SecretKey)
+                .set("spark.sql.catalog.nessie.s3.path-style-access", "true")
+                .set("spark.sql.catalog.nessie.s3.access-grants-enabled", "false")
+                .set("spark.sql.catalog.nessie.client.region", "us-east-1");
 
 
         return SparkSession.builder()

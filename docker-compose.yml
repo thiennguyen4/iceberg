@@ -7,6 +7,7 @@ services:
     depends_on:
       - rest
       - minio
+      - nessie
     volumes:
       - ./warehouse:/home/iceberg/warehouse
       - ./notebooks:/home/iceberg/notebooks/notebooks
@@ -65,6 +66,8 @@ services:
       /usr/bin/mc rm -r --force minio/warehouse;
       /usr/bin/mc mb minio/warehouse;
       /usr/bin/mc policy set public minio/warehouse;
+      /usr/bin/mc mb --ignore-existing minio/nessie;
+      /usr/bin/mc policy set public minio/nessie;
       tail -f /dev/null
       "
 
@@ -135,8 +138,9 @@ services:
       SEARCH_TYPE: "elasticsearch"
       OM_MAX_FRAME_SIZE: "10485760"
       SERVER_HOST_API_URL: http://openmetadata:8585/api
-      AUTHENTICATION_ENABLED: "false"
-      AUTHORIZER_CLASS_NAME: "org.openmetadata.service.security.NoopAuthorizer"
+      AUTHENTICATION_PROVIDER: "basic"
+      AUTHENTICATION_ENABLED: "true"
+      AUTHORIZER_CLASS_NAME: "org.openmetadata.service.security.DefaultAuthorizer"
       LOG_LEVEL: INFO
     restart: on-failure
 
@@ -291,6 +295,23 @@ services:
       - NODE_ENV=development
     volumes:
       - ./cube/schema:/cube/conf/model
+
+  nessie:
+    image: ghcr.io/projectnessie/nessie:0.67.0
+    container_name: nessie
+    networks:
+      iceberg_net:
+    ports:
+      - "19120:19120"
+    environment:
+      - nessie.version.store.type=IN_MEMORY
+      - quarkus.http.port=19120
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:19120/api/v2/config" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
 volumes:
   openmetadata_mysql:

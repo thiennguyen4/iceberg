@@ -1,5 +1,5 @@
 cube(`Orders`, {
-  sql: `SELECT * FROM iceberg.warehouse.sales.orders`,
+  sql: `SELECT * FROM iceberg.sales.orders`,
 
   measures: {
     count: {

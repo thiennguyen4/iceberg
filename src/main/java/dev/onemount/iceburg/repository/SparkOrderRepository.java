@@ -29,18 +29,21 @@ public class SparkOrderRepository implements OrderRepository {
 
     private static final String NAMESPACE = "sales";
     private static final String TABLE_NAME = "orders";
-    private static final String FULL_TABLE_NAME = NAMESPACE + "." + TABLE_NAME;
+
+    private String fullTableName() {
+        return icebergTableConfig.getActiveCatalog() + "." + NAMESPACE + "." + TABLE_NAME;
+    }
 
     @Override
     public void ensureNamespaceExists() {
         String createNamespaceSql = String.format(
-                "CREATE NAMESPACE IF NOT EXISTS %s",
-                NAMESPACE
+                "CREATE NAMESPACE IF NOT EXISTS %s.%s",
+                icebergTableConfig.getActiveCatalog(), NAMESPACE
         );
 
         log.debug("Executing SQL: {}", createNamespaceSql);
         sparkSession.sql(createNamespaceSql);
-        log.info("Namespace '{}' ensured to exist", NAMESPACE);
+        log.info("Namespace '{}.{}' ensured to exist", icebergTableConfig.getActiveCatalog(), NAMESPACE);
     }
 
     @Override
@@ -54,20 +57,20 @@ public class SparkOrderRepository implements OrderRepository {
                         "  price DECIMAL(10,2)," +
                         "  order_timestamp TIMESTAMP" +
                         ") USING iceberg %s",
-                FULL_TABLE_NAME,
+                fullTableName(),
                 icebergTableConfig.getTableProperties()
         );
 
         log.debug("Executing SQL: {}", createTableSql);
         sparkSession.sql(createTableSql);
-        log.info("Table '{}' ensured to exist with format: {}", FULL_TABLE_NAME, icebergTableConfig.getWriteFormat());
+        log.info("Table '{}' ensured to exist with format: {}", fullTableName(), icebergTableConfig.getWriteFormat());
     }
 
     @Override
     public void insertOrder(String orderId, String customerId, String productName, Integer quantity, BigDecimal price, Timestamp orderTimestamp) {
         String insertSql = String.format(
                 "INSERT INTO %s VALUES ('%s', '%s', '%s', %d, %s, TIMESTAMP '%s')",
-                FULL_TABLE_NAME,
+                fullTableName(),
                 orderId,
                 customerId,
                 productName,
@@ -78,12 +81,12 @@ public class SparkOrderRepository implements OrderRepository {
 
         log.debug("Executing SQL: {}", insertSql);
         sparkSession.sql(insertSql);
-        log.info("Order data inserted into table '{}'", FULL_TABLE_NAME);
+        log.info("Order data inserted into table '{}'", fullTableName());
     }
 
     @Override
     public void updateOrder(String orderId, Map<String, Object> updates) {
-        StringBuilder updateSql = new StringBuilder(String.format("UPDATE %s SET ", FULL_TABLE_NAME));
+        StringBuilder updateSql = new StringBuilder(String.format("UPDATE %s SET ", fullTableName()));
         List<String> setStatements = new ArrayList<>();
 
         if (updates.containsKey("customerId")) {
@@ -109,7 +112,7 @@ public class SparkOrderRepository implements OrderRepository {
 
     @Override
     public void deleteOrder(String orderId) {
-        String deleteSql = String.format("DELETE FROM %s WHERE order_id = '%s'", FULL_TABLE_NAME, orderId);
+        String deleteSql = String.format("DELETE FROM %s WHERE order_id = '%s'", fullTableName(), orderId);
 
         log.debug("Executing SQL: {}", deleteSql);
         sparkSession.sql(deleteSql);
@@ -129,7 +132,7 @@ public class SparkOrderRepository implements OrderRepository {
                         "  price = source.price " +
                         "WHEN NOT MATCHED THEN INSERT (order_id, customer_id, product_name, quantity, price, order_timestamp) " +
                         "VALUES (source.order_id, source.customer_id, source.product_name, source.quantity, source.price, source.order_timestamp)",
-                FULL_TABLE_NAME,
+                fullTableName(),
                 orderId,
                 customerId,
                 productName,
@@ -145,7 +148,7 @@ public class SparkOrderRepository implements OrderRepository {
 
     @Override
     public List<OrderResponse> findAll() {
-        String selectSql = String.format("SELECT * FROM %s", FULL_TABLE_NAME);
+        String selectSql = String.format("SELECT * FROM %s", fullTableName());
         log.debug("Executing SQL: {}", selectSql);
         Dataset<Row> ordersDs = sparkSession.sql(selectSql);
         return mapRowsToOrderResponses(ordersDs);
@@ -153,7 +156,7 @@ public class SparkOrderRepository implements OrderRepository {
 
     @Override
     public List<OrderResponse> findByFilters(String customerId, String productName, Integer minQuantity, Integer maxQuantity, String startDate, String endDate) {
-        Dataset<Row> ordersDs = sparkSession.table(FULL_TABLE_NAME);
+        Dataset<Row> ordersDs = sparkSession.table(fullTableName());
 
         if (customerId != null && !customerId.isEmpty()) {
             ordersDs = ordersDs.filter(String.format("customer_id = '%s'", customerId));
@@ -181,7 +184,7 @@ public class SparkOrderRepository implements OrderRepository {
     public List<OrderResponse> findBySnapshot(Long snapshotId) {
         String timeTravelSql = String.format(
                 "SELECT * FROM %s VERSION AS OF %d",
-                FULL_TABLE_NAME,
+                fullTableName(),
                 snapshotId
         );
 
@@ -194,7 +197,7 @@ public class SparkOrderRepository implements OrderRepository {
     public List<OrderResponse> findByTimestamp(String timestamp) {
         String timeTravelSql = String.format(
                 "SELECT * FROM %s TIMESTAMP AS OF '%s'",
-                FULL_TABLE_NAME,
+                fullTableName(),
                 timestamp
         );
 
@@ -207,7 +210,7 @@ public class SparkOrderRepository implements OrderRepository {
     public List<SnapshotInfo> getSnapshotHistory() {
         String snapshotsSql = String.format(
                 "SELECT snapshot_id, committed_at, operation FROM %s.snapshots ORDER BY committed_at DESC",
-                FULL_TABLE_NAME
+                fullTableName()
         );
 
         Dataset<Row> snapshotsDs = sparkSession.sql(snapshotsSql);
@@ -227,7 +230,7 @@ public class SparkOrderRepository implements OrderRepository {
     @Override
     public Long getLatestSnapshotId() {
         try {
-            String snapshotsSql = String.format("SELECT snapshot_id FROM %s.snapshots ORDER BY committed_at DESC LIMIT 1", FULL_TABLE_NAME);
+            String snapshotsSql = String.format("SELECT snapshot_id FROM %s.snapshots ORDER BY committed_at DESC LIMIT 1", fullTableName());
             Dataset<Row> snapshotDs = sparkSession.sql(snapshotsSql);
 
             if (!snapshotDs.isEmpty()) {
@@ -235,7 +238,7 @@ public class SparkOrderRepository implements OrderRepository {
                 log.debug("Current snapshot ID: {}", snapshotId);
                 return snapshotId;
             } else {
-                log.warn("No snapshots found for table '{}'", FULL_TABLE_NAME);
+                log.warn("No snapshots found for table '{}'", fullTableName());
                 return null;
             }
         } catch (Exception e) {
@@ -246,7 +249,7 @@ public class SparkOrderRepository implements OrderRepository {
 
     @Override
     public Dataset<Row> getAllOrdersDataset() {
-        String selectSql = String.format("SELECT * FROM %s", FULL_TABLE_NAME);
+        String selectSql = String.format("SELECT * FROM %s", fullTableName());
         log.debug("Executing SQL: {}", selectSql);
         return sparkSession.sql(selectSql);
     }
@@ -299,9 +302,9 @@ public class SparkOrderRepository implements OrderRepository {
             }
 
             Dataset<Row> df = sparkSession.createDataFrame(rows, schema);
-            df.writeTo(FULL_TABLE_NAME).append();
+            df.writeTo(fullTableName()).append();
 
-            log.info("Batch inserted {} orders into table '{}'", orders.size(), FULL_TABLE_NAME);
+            log.info("Batch inserted {} orders into table '{}'", orders.size(), fullTableName());
         } catch (Exception e) {
             log.error("Error during batch insert", e);
             throw new RuntimeException("Failed to batch insert orders", e);
@@ -317,7 +320,9 @@ public class SparkOrderRepository implements OrderRepository {
             int beforeCount = beforeSnapshots.size();
 
             String expireSql = String.format(
-                    "CALL system.expire_snapshots(table => '%s.%s', older_than => TIMESTAMP '%s')",
+                    "CALL %s.system.expire_snapshots(table => '%s.%s.%s', older_than => TIMESTAMP '%s')",
+                    icebergTableConfig.getActiveCatalog(),
+                    icebergTableConfig.getActiveCatalog(),
                     NAMESPACE,
                     TABLE_NAME,
                     olderThanTimestamp
@@ -352,7 +357,9 @@ public class SparkOrderRepository implements OrderRepository {
             }
 
             String expireSql = String.format(
-                    "CALL system.expire_snapshots(table => '%s.%s', retain_last => %d)",
+                    "CALL %s.system.expire_snapshots(table => '%s.%s.%s', retain_last => %d)",
+                    icebergTableConfig.getActiveCatalog(),
+                    icebergTableConfig.getActiveCatalog(),
                     NAMESPACE,
                     TABLE_NAME,
                     retainLast
@@ -383,7 +390,9 @@ public class SparkOrderRepository implements OrderRepository {
             int beforeCount = beforeSnapshots.size();
 
             String expireSql = String.format(
-                    "CALL system.expire_snapshots(table => '%s.%s', older_than => TIMESTAMP '%s', retain_last => %d)",
+                    "CALL %s.system.expire_snapshots(table => '%s.%s.%s', older_than => TIMESTAMP '%s', retain_last => %d)",
+                    icebergTableConfig.getActiveCatalog(),
+                    icebergTableConfig.getActiveCatalog(),
                     NAMESPACE,
                     TABLE_NAME,
                     olderThanTimestamp,
@@ -436,7 +445,7 @@ public class SparkOrderRepository implements OrderRepository {
                 "  CAST(((id %% 1000 + 100) * 1.99) AS DECIMAL(10,2)) as price, " +
                 "  TIMESTAMP(DATE_ADD(CURRENT_DATE(), -CAST((id %% 365) AS INT))) as order_timestamp " +
                 "FROM RANGE(%d)",
-                FULL_TABLE_NAME,
+                fullTableName(),
                 rowCount
             );
 
@@ -454,7 +463,7 @@ public class SparkOrderRepository implements OrderRepository {
             try {
                 String filesSql = String.format(
                     "SELECT SUM(file_size_in_bytes) as total_size FROM %s.files",
-                    FULL_TABLE_NAME
+                    fullTableName()
                 );
                 Dataset<Row> filesDs = sparkSession.sql(filesSql);
                 if (!filesDs.isEmpty() && !filesDs.first().isNullAt(0)) {
@@ -488,10 +497,10 @@ public class SparkOrderRepository implements OrderRepository {
         try {
             if (warmup) {
                 log.info("Performing warmup query...");
-                sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", FULL_TABLE_NAME)).collect();
+                sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", fullTableName())).collect();
             }
 
-            String querySql = String.format("SELECT * FROM %s", FULL_TABLE_NAME);
+            String querySql = String.format("SELECT * FROM %s", fullTableName());
             long totalRows = 0;
 
             for (int i = 0; i < iterations; i++) {
@@ -512,7 +521,7 @@ public class SparkOrderRepository implements OrderRepository {
             }
 
             return buildBenchmarkResult(executionTimes, totalRows, totalRows,
-                "Full table scan - SELECT * FROM " + FULL_TABLE_NAME);
+                "Full table scan - SELECT * FROM " + fullTableName());
 
         } catch (Exception e) {
             log.error("Error during full table scan benchmark", e);
@@ -530,17 +539,17 @@ public class SparkOrderRepository implements OrderRepository {
                 log.info("Performing warmup query...");
                 String warmupSql = String.format(
                     "SELECT * FROM %s WHERE customer_id = '%s' AND product_name = '%s'",
-                    FULL_TABLE_NAME, customerId, productName
+                    fullTableName(), customerId, productName
                 );
                 sparkSession.sql(warmupSql).collect();
             }
 
             String querySql = String.format(
                 "SELECT * FROM %s WHERE customer_id = '%s' AND product_name = '%s'",
-                FULL_TABLE_NAME, customerId, productName
+                fullTableName(), customerId, productName
             );
 
-            long totalRowsScanned = sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", FULL_TABLE_NAME))
+            long totalRowsScanned = sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", fullTableName()))
                 .first().getLong(0);
             long filteredRows = 0;
 
@@ -580,7 +589,7 @@ public class SparkOrderRepository implements OrderRepository {
                 log.info("Performing warmup query...");
                 sparkSession.sql(String.format(
                     "SELECT product_name, COUNT(*) as count, SUM(quantity) as total_qty, AVG(price) as avg_price FROM %s GROUP BY product_name",
-                    FULL_TABLE_NAME
+                    fullTableName()
                 )).collect();
             }
 
@@ -591,10 +600,10 @@ public class SparkOrderRepository implements OrderRepository {
                 "MIN(price) as min_price, " +
                 "MAX(price) as max_price " +
                 "FROM %s GROUP BY product_name ORDER BY order_count DESC",
-                FULL_TABLE_NAME
+                fullTableName()
             );
 
-            long totalRowsScanned = sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", FULL_TABLE_NAME))
+            long totalRowsScanned = sparkSession.sql(String.format("SELECT COUNT(*) FROM %s", fullTableName()))
                 .first().getLong(0);
             long resultRows = 0;
 
