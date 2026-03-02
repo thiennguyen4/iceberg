@@ -1,0 +1,24 @@
+source:
+  type: dbt
+  serviceName: iceberg-rest-catalog
+  sourceConfig:
+    config:
+      type: DBT
+      dbtConfigSource:
+        dbtSecurityConfig: {}
+        dbtPrefixConfig:
+          dbtCatalogFilePath: /opt/dbt/nessie_transform/target/catalog.json
+          dbtManifestFilePath: /opt/dbt/nessie_transform/target/manifest.json
+          dbtRunResultsFilePath: /opt/dbt/nessie_transform/target/run_results.json
+      dbtUpdateDescriptions: true
+      includeTags: true
+      dbtClassificationName: dbt_tags
+sink:
+  type: metadata-rest
+  config: {}
+workflowConfig:
+  loggerLevel: INFO
+  openMetadataServerConfig:
+    hostPort: http://openmetadata:8585/api
+    authProvider: no-auth
+

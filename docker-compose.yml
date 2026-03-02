@@ -1,324 +1,280 @@
-services:
-  spark-iceberg:
-    image: tabulario/spark-iceberg
-    container_name: spark-iceberg
-    networks:
-      iceberg_net:
-    depends_on:
-      - rest
-      - minio
-      - nessie
-    volumes:
-      - ./warehouse:/home/iceberg/warehouse
-      - ./notebooks:/home/iceberg/notebooks/notebooks
-    environment:
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
-      - AWS_REGION=us-east-1
-    ports:
-      - 8888:8888
-      - 10000:10000
-      - 10001:10001
-  rest:
-    image: apache/iceberg-rest-fixture
-    container_name: iceberg-rest
-    networks:
-      iceberg_net:
-    ports:
-      - 8181:8181
-    environment:
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
-      - AWS_REGION=us-east-1
-      - CATALOG_WAREHOUSE=s3://warehouse/
-      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
-      - CATALOG_S3_ENDPOINT=http://minio:9000
-
-  minio:
-    image: minio/minio
-    container_name: minio
-    environment:
-      - MINIO_ROOT_USER=admin
-      - MINIO_ROOT_PASSWORD=password
-      - MINIO_DOMAIN=minio
-    networks:
-      iceberg_net:
-        aliases:
-          - warehouse.minio
-    ports:
-      - 9001:9001
-      - 9000:9000
-    command: ["server", "/data", "--console-address", ":9001"]
-  mc:
-    depends_on:
-      - minio
-    image: minio/mc
-    container_name: mc
-    networks:
-      iceberg_net:
-    environment:
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
-      - AWS_REGION=us-east-1
-    entrypoint: |
-      /bin/sh -c "
-      until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
-      /usr/bin/mc rm -r --force minio/warehouse;
-      /usr/bin/mc mb minio/warehouse;
-      /usr/bin/mc policy set public minio/warehouse;
-      /usr/bin/mc mb --ignore-existing minio/nessie;
-      /usr/bin/mc policy set public minio/nessie;
-      tail -f /dev/null
-      "
-
-  openmetadata-mysql:
-    image: mysql:8.0
-    container_name: openmetadata-mysql
-    ports:
-      - "3306:3306"
-    networks:
-      iceberg_net:
-    environment:
-      MYSQL_ROOT_PASSWORD: openmetadata
-      MYSQL_DATABASE: openmetadata_db
-      MYSQL_USER: openmetadata
-      MYSQL_PASSWORD: openmetadata
-    volumes:
-      - openmetadata_mysql:/var/lib/mysql
-      - ./mysql_init.sql:/docker-entrypoint-initdb.d/mysql_init.sql
-    healthcheck:
-      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "openmetadata", "-popenmetadata" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  openmetadata-db:
-    image: openmetadata/server:1.11.7
-    container_name: openmetadata-db-migrations
-    depends_on:
-      openmetadata-mysql:
-        condition: service_healthy
-    networks:
-      iceberg_net:
-    environment:
-      DB_HOST: openmetadata-mysql
-      DB_PORT: 3306
-      DB_USER: openmetadata
-      DB_USER_PASSWORD: openmetadata
-      DB_NAME: openmetadata_db
-    entrypoint: /bin/bash
-    command: [ "-c", "./bootstrap/openmetadata-ops.sh migrate" ]
-
-  openmetadata:
-    image: openmetadata/server:1.11.7
-    container_name: openmetadata
-    depends_on:
-      openmetadata-mysql:
-        condition: service_healthy
-      openmetadata-db:
-        condition: service_completed_successfully
-      openmetadata-elasticsearch:
-        condition: service_healthy
-    networks:
-      iceberg_net:
-    ports:
-      - 8585:8585
-    environment:
-      OPENMETADATA_CLUSTER_NAME: local
-      DB_HOST: openmetadata-mysql
-      DB_PORT: 3306
-      DB_USER: openmetadata
-      DB_USER_PASSWORD: openmetadata
-      DB_DATABASE: openmetadata_db
-      ELASTICSEARCH_HOST: openmetadata-elasticsearch
-      ELASTICSEARCH_PORT: 9200
-      PIPELINE_SERVICE_CLIENT_ENDPOINT: http://openmetadata-ingestion:8080
-      PIPELINE_SERVICE_CLIENT_CLASS_NAME: org.openmetadata.service.clients.pipeline.airflow.AirflowRESTClient
-      ELASTICSEARCH_RECREATE_INDEX: "true"
-      SEARCH_TYPE: "elasticsearch"
-      OM_MAX_FRAME_SIZE: "10485760"
-      SERVER_HOST_API_URL: http://openmetadata:8585/api
-      AUTHENTICATION_PROVIDER: "basic"
-      AUTHENTICATION_ENABLED: "true"
-      AUTHORIZER_CLASS_NAME: "org.openmetadata.service.security.DefaultAuthorizer"
-      LOG_LEVEL: INFO
-    restart: on-failure
-
-  openmetadata-elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
-    container_name: openmetadata-elasticsearch
-    networks:
-      iceberg_net:
-    environment:
-      - discovery.type=single-node
-      - ES_JAVA_OPTS=-Xms1g -Xmx1g
-      - action.destructive_requires_name=false
-    healthcheck:
-      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s || exit 1" ]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 60s
-    volumes:
-      - openmetadata_es:/usr/share/elasticsearch/data
-
-  marquez:
-    image: marquezproject/marquez:latest
-    container_name: marquez
-    ports:
-      - "5002:5000"
-      - "5003:5001"
-    networks:
-      iceberg_net:
-    environment:
-      - MARQUEZ_PORT=5000
-      - MARQUEZ_ADMIN_PORT=5001
-      - POSTGRES_HOST=marquez-db
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=marquez
-      - POSTGRES_USER=marquez
-      - POSTGRES_PASSWORD=marquez
-    depends_on:
-      - marquez-db
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:5001/healthcheck" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  marquez-db:
-    image: postgres:14
-    container_name: marquez-db
-    ports:
-      - "5432:5432"
-    networks:
-      iceberg_net:
-    environment:
-      - POSTGRES_USER=marquez
-      - POSTGRES_PASSWORD=marquez
-      - POSTGRES_DB=marquez
-    volumes:
-      - marquez-db:/var/lib/postgresql/data
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U marquez" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  openmetadata-ingestion:
-#    image: openmetadata/ingestion:1.11.7
-    build:
-      context: .
-      dockerfile: Dockerfile.ingestion
-    container_name: openmetadata-ingestion
-    depends_on:
-      openmetadata:
-        condition: service_started
-      openmetadata-mysql:
-        condition: service_healthy
-      marquez:
-        condition: service_healthy
-    networks:
-      - iceberg_net
-    environment:
-      AIRFLOW__WEBSERVER__WEB_SERVER_HOST: 0.0.0.0
-      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
-      AIRFLOW__WEBSERVER__SECRET_KEY: openmetadata_secret_key
-      OPENMETADATA_SERVER_URL: http://openmetadata:8585/api
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://openmetadata:openmetadata@openmetadata-mysql:3306/airflow_db
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-      OPENMETADATA_ELASTICSEARCH_HOST: openmetadata-elasticsearch
-      MARQUEZ_URL: http://marquez:5000
-    ports:
-      - "8080:8080"
-    restart: on-failure
-    volumes:
-      - airflow-dags:/opt/airflow/dags
-      - ./openmetadata-iceberg-dag.yaml:/tmp/iceberg-ingestion.yaml
-      - ./init_iceberg_service.py:/tmp/init_iceberg_service.py
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    command: >
-      bash -c "
-      airflow db migrate &&
-      airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin || true &&
-      (sleep 60 && python /tmp/init_iceberg_service.py &) &&
-      airflow standalone
-      "
-  dremio:
-    image: dremio/dremio-oss:latest
-    container_name: dremio
-    networks:
-      iceberg_net:
-    ports:
-      - "9047:9047"
-      - "31010:31010"
-      - "45678:45678"
-    volumes:
-      - dremio-data:/opt/dremio/data
-    environment:
-      - DREMIO_MAX_MEMORY_SIZE_MB=4096
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9047" ]
-      interval: 30s
-      timeout: 10s
-      retries: 10
-
-  cube:
-    image: cubejs/cube:latest
-    container_name: cube
-    networks:
-      iceberg_net:
-    ports:
-      - "4000:4000"
-    depends_on:
-      dremio:
-        condition: service_healthy
-    environment:
-      - CUBEJS_DB_TYPE=dremio
-      - CUBEJS_DB_HOST=dremio
-      - CUBEJS_DB_PORT=9047
-      - CUBEJS_DB_USER=admin
-      - CUBEJS_DB_PASS=dremio123
-      - CUBEJS_API_SECRET=demo_secret_key_cube_dremio_2026
-      - CUBEJS_DEV_MODE=true
-      - CUBEJS_WEB_SOCKETS=true
-      - CUBEJS_TELEMETRY=false
-      - CUBEJS_SCHEMA_PATH=model
-      - NODE_ENV=development
-    volumes:
-      - ./cube/schema:/cube/conf/model
-
-  nessie:
-    image: ghcr.io/projectnessie/nessie:0.67.0
-    container_name: nessie
-    networks:
-      iceberg_net:
-    ports:
-      - "19120:19120"
-    environment:
-      - nessie.version.store.type=IN_MEMORY
-      - quarkus.http.port=19120
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:19120/api/v2/config" ]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-volumes:
-  openmetadata_mysql:
-  openmetadata_es:
-  airflow-dags:
-  marquez-db:
-  dremio-data:
-
-networks:
-  iceberg_net:
+  services:
+    spark-iceberg:
+      image: tabulario/spark-iceberg
+      container_name: spark-iceberg
+      networks:
+        iceberg_net:
+      depends_on:
+        - rest
+        - minio
+        - nessie
+      volumes:
+        - ./warehouse:/home/iceberg/warehouse
+        - ./notebooks:/home/iceberg/notebooks/notebooks
+        - ./spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      environment:
+        - AWS_ACCESS_KEY_ID=admin
+        - AWS_SECRET_ACCESS_KEY=password
+        - AWS_REGION=us-east-1
+      ports:
+        - 8888:8888
+        - 10000:10000
+        - 10001:10001
+    rest:
+      image: apache/iceberg-rest-fixture
+      container_name: iceberg-rest
+      networks:
+        iceberg_net:
+      ports:
+        - 8181:8181
+      environment:
+        - AWS_ACCESS_KEY_ID=admin
+        - AWS_SECRET_ACCESS_KEY=password
+        - AWS_REGION=us-east-1
+        - CATALOG_WAREHOUSE=s3://warehouse/
+        - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+        - CATALOG_S3_ENDPOINT=http://minio:9000
+  
+    minio:
+      image: minio/minio
+      container_name: minio
+      environment:
+        - MINIO_ROOT_USER=admin
+        - MINIO_ROOT_PASSWORD=password
+        - MINIO_DOMAIN=minio
+      networks:
+        iceberg_net:
+          aliases:
+            - warehouse.minio
+      ports:
+        - 9001:9001
+        - 9000:9000
+      command: ["server", "/data", "--console-address", ":9001"]
+    mc:
+      depends_on:
+        - minio
+      image: minio/mc
+      container_name: mc
+      networks:
+        iceberg_net:
+      environment:
+        - AWS_ACCESS_KEY_ID=admin
+        - AWS_SECRET_ACCESS_KEY=password
+        - AWS_REGION=us-east-1
+      entrypoint: |
+        /bin/sh -c "
+        until (/usr/bin/mc alias set minio http://minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
+        /usr/bin/mc rm -r --force minio/warehouse;
+        /usr/bin/mc mb minio/warehouse;
+        /usr/bin/mc policy set public minio/warehouse;
+        /usr/bin/mc mb --ignore-existing minio/nessie;
+        /usr/bin/mc policy set public minio/nessie;
+        tail -f /dev/null
+        "
+  
+    openmetadata-mysql:
+      image: mysql:8.0
+      container_name: openmetadata-mysql
+      ports:
+        - "3306:3306"
+      networks:
+        iceberg_net:
+      environment:
+        MYSQL_ROOT_PASSWORD: openmetadata
+        MYSQL_DATABASE: openmetadata_db
+        MYSQL_USER: openmetadata
+        MYSQL_PASSWORD: openmetadata
+      volumes:
+        - openmetadata_mysql:/var/lib/mysql
+        - ./mysql_init.sql:/docker-entrypoint-initdb.d/mysql_init.sql
+      healthcheck:
+        test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "openmetadata", "-popenmetadata" ]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 60s
+  
+    openmetadata-db:
+      image: openmetadata/server:1.11.7
+      container_name: openmetadata-db-migrations
+      depends_on:
+        openmetadata-mysql:
+          condition: service_healthy
+      networks:
+        iceberg_net:
+      environment:
+        DB_HOST: openmetadata-mysql
+        DB_PORT: 3306
+        DB_USER: openmetadata
+        DB_USER_PASSWORD: openmetadata
+        DB_NAME: openmetadata_db
+      entrypoint: /bin/bash
+      command: [ "-c", "./bootstrap/openmetadata-ops.sh migrate" ]
+  
+    openmetadata:
+      image: openmetadata/server:1.11.7
+      container_name: openmetadata
+      depends_on:
+        openmetadata-mysql:
+          condition: service_healthy
+        openmetadata-db:
+          condition: service_completed_successfully
+        openmetadata-elasticsearch:
+          condition: service_healthy
+      networks:
+        iceberg_net:
+      ports:
+        - 8585:8585
+      environment:
+        OPENMETADATA_CLUSTER_NAME: local
+        DB_HOST: openmetadata-mysql
+        DB_PORT: 3306
+        DB_USER: openmetadata
+        DB_USER_PASSWORD: openmetadata
+        DB_DATABASE: openmetadata_db
+        ELASTICSEARCH_HOST: openmetadata-elasticsearch
+        ELASTICSEARCH_PORT: 9200
+        PIPELINE_SERVICE_CLIENT_ENDPOINT: http://openmetadata-ingestion:8080
+        PIPELINE_SERVICE_CLIENT_CLASS_NAME: org.openmetadata.service.clients.pipeline.airflow.AirflowRESTClient
+        ELASTICSEARCH_RECREATE_INDEX: "true"
+        SEARCH_TYPE: "elasticsearch"
+        OM_MAX_FRAME_SIZE: "10485760"
+        SERVER_HOST_API_URL: http://openmetadata:8585/api
+        AUTHENTICATION_PROVIDER: "basic"
+        AUTHENTICATION_ENABLED: "true"
+        AUTHORIZER_CLASS_NAME: "org.openmetadata.service.security.DefaultAuthorizer"
+        LOG_LEVEL: INFO
+      restart: on-failure
+  
+    openmetadata-elasticsearch:
+      image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+      container_name: openmetadata-elasticsearch
+      networks:
+        iceberg_net:
+      environment:
+        - discovery.type=single-node
+        - ES_JAVA_OPTS=-Xms1g -Xmx1g
+        - action.destructive_requires_name=false
+      healthcheck:
+        test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s || exit 1" ]
+        interval: 10s
+        timeout: 5s
+        retries: 30
+        start_period: 60s
+      volumes:
+        - openmetadata_es:/usr/share/elasticsearch/data
+  
+    openmetadata-ingestion:
+  #    image: openmetadata/ingestion:1.11.7
+      build:
+        context: .
+        dockerfile: Dockerfile.ingestion
+      container_name: openmetadata-ingestion
+      depends_on:
+        openmetadata:
+          condition: service_started
+        openmetadata-mysql:
+          condition: service_healthy
+      networks:
+        - iceberg_net
+      environment:
+        AIRFLOW__WEBSERVER__WEB_SERVER_HOST: 0.0.0.0
+        AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8080
+        AIRFLOW__WEBSERVER__SECRET_KEY: openmetadata_secret_key
+        OPENMETADATA_SERVER_URL: http://openmetadata:8585/api
+        AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: mysql+pymysql://openmetadata:openmetadata@openmetadata-mysql:3306/airflow_db
+        AIRFLOW__CORE__EXECUTOR: LocalExecutor
+        AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.basic_auth
+        AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+        AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+        OPENMETADATA_ELASTICSEARCH_HOST: openmetadata-elasticsearch
+        AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS: "admin:admin"
+      ports:
+        - "8080:8080"
+      restart: on-failure
+      volumes:
+        - airflow-dags:/opt/airflow/dags
+        - ./om-metadata-ingestion.yaml:/tmp/om-metadata-ingestion.yaml
+        - ./om-dbt-ingestion.yaml:/tmp/om-dbt-ingestion.yaml
+        - ./dbt-airflow-dag.py:/opt/airflow/dags/dbt_nessie_transform_lineage.py
+        - ./dbt:/opt/dbt/nessie_transform
+      healthcheck:
+        test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+        interval: 30s
+        timeout: 10s
+        retries: 5
+        start_period: 60s
+      command: >
+        bash -c "
+        airflow db migrate &&
+        airflow standalone
+        "
+    dremio:
+      image: dremio/dremio-oss:latest
+      container_name: dremio
+      networks:
+        iceberg_net:
+      ports:
+        - "9047:9047"
+        - "31010:31010"
+        - "45678:45678"
+      volumes:
+        - dremio-data:/opt/dremio/data
+      environment:
+        - DREMIO_MAX_MEMORY_SIZE_MB=4096
+      healthcheck:
+        test: [ "CMD", "curl", "-f", "http://localhost:9047" ]
+        interval: 30s
+        timeout: 10s
+        retries: 10
+  
+    cube:
+      image: cubejs/cube:latest
+      container_name: cube
+      networks:
+        iceberg_net:
+      ports:
+        - "4000:4000"
+      depends_on:
+        dremio:
+          condition: service_healthy
+      environment:
+        - CUBEJS_DB_TYPE=dremio
+        - CUBEJS_DB_HOST=dremio
+        - CUBEJS_DB_PORT=9047
+        - CUBEJS_DB_USER=admin
+        - CUBEJS_DB_PASS=dremio123
+        - CUBEJS_API_SECRET=demo_secret_key_cube_dremio_2026
+        - CUBEJS_DEV_MODE=true
+        - CUBEJS_WEB_SOCKETS=true
+        - CUBEJS_TELEMETRY=false
+        - CUBEJS_SCHEMA_PATH=model
+        - NODE_ENV=development
+      volumes:
+        - ./cube/schema:/cube/conf/model
+  
+    nessie:
+      image: ghcr.io/projectnessie/nessie:0.99.0
+      container_name: nessie
+      networks:
+        iceberg_net:
+      ports:
+        - "19120:19120"
+      environment:
+        - nessie.version.store.type=IN_MEMORY
+        - quarkus.http.port=19120
+      healthcheck:
+        test: [ "CMD", "curl", "-f", "http://localhost:19120/api/v2/config" ]
+        interval: 10s
+        timeout: 5s
+        retries: 10
+        start_period: 30s
+  
+  volumes:
+    openmetadata_mysql:
+    openmetadata_es:
+    airflow-dags:
+    dremio-data:
+  
+  networks:
+    iceberg_net:

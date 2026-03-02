@@ -70,12 +70,6 @@ public class SparkConfig {
                 .set("spark.hadoop.fs.s3a.path.style.access", "true")
                 .set("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
                 .set("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-                .set("spark.extraListeners", "io.openlineage.spark.agent.OpenLineageSparkListener")
-                .set("spark.openlineage.transport.type", "http")
-                .set("spark.openlineage.transport.url", "http://localhost:5002")
-                .set("spark.openlineage.namespace", "iceberg_demo")
-                .set("spark.openlineage.parentJobNamespace", "iceberg_demo")
-                .set("spark.openlineage.parentJobName", "iceberg_lineage_job")
 
                 // Nessie Catalog
                 .set("spark.sql.catalog.nessie", "org.apache.iceberg.spark.SparkCatalog")

@@ -1,0 +1,30 @@
+version: 2
+
+models:
+  - name: mart_daily_revenue
+    description: "Daily revenue aggregation for completed orders - stored in s3://nessie/dbt_mart/"
+    columns:
+      - name: order_date
+        description: "Business date"
+        data_tests:
+          - not_null
+          - unique
+      - name: total_orders
+        description: "Count of completed orders"
+        data_tests:
+          - not_null
+      - name: total_revenue
+        description: "Sum of completed order amounts"
+        data_tests:
+          - not_null
+      - name: unique_customers
+        description: "Distinct customers per day"
+      - name: avg_order_value
+        description: "Average order value"
+      - name: min_order_value
+        description: "Minimum order value"
+      - name: max_order_value
+        description: "Maximum order value"
+      - name: updated_at
+        description: "Last transformation timestamp"
+

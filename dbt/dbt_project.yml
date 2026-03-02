@@ -1,0 +1,23 @@
+name: nessie_transform
+version: "1.0.0"
+config-version: 2
+
+profile: nessie_spark
+
+model-paths: ["models"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  nessie_transform:
+    staging:
+      +materialized: table
+      +file_format: iceberg
+    mart:
+      +materialized: table
+      +file_format: iceberg
+      +table_properties:
+        write.format.default: parquet
+        write.parquet.compression-codec: zstd

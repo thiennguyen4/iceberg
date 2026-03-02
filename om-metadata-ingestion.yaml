@@ -6,8 +6,10 @@ source:
       type: Iceberg
       catalog:
         name: rest
-        uri: http://rest:8181
-        warehouse: s3://warehouse/
+        connection:
+          type: RestCatalogConnection
+          uri: http://rest:8181
+          warehouse: s3://warehouse/
       fileSystem:
         securityConfig:
           awsAccessKeyId: admin
@@ -32,9 +34,9 @@ source:
 sink:
   type: metadata-rest
   config: {}
-  createServiceIfNotExists: true
 workflowConfig:
   loggerLevel: INFO
   openMetadataServerConfig:
     hostPort: http://openmetadata:8585/api
     authProvider: no-auth
+

@@ -1,0 +1,28 @@
+version: 2
+
+sources:
+  - name: nessie_raw
+    description: "Raw data tables stored in Nessie catalog (s3://nessie/)"
+    schema: nessie.default
+    tables:
+      - name: orders
+        description: "Raw orders ingested by Spark into Nessie catalog"
+        columns:
+          - name: order_id
+            description: "Unique order identifier"
+            data_tests:
+              - not_null
+              - unique
+          - name: customer_id
+            description: "Customer identifier"
+            data_tests:
+              - not_null
+          - name: order_time
+            description: "Timestamp when order was placed"
+          - name: amount
+            description: "Order total amount in decimal"
+          - name: status
+            description: "Order status: completed | pending | cancelled"
+          - name: created_at
+            description: "Record creation timestamp"
+
