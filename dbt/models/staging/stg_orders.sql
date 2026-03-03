@@ -4,16 +4,17 @@ with source as (
 
 cleaned as (
     select
-        cast(order_id    as bigint)         as order_id,
-        cast(customer_id as bigint)         as customer_id,
-        order_time,
-        cast(amount      as decimal(10, 2)) as amount,
-        lower(trim(status))                 as status,
-        created_at
+        order_id,
+        customer_id,
+        trim(product_name)                  as product_name,
+        quantity,
+        cast(price as decimal(10, 2))       as price,
+        order_timestamp
     from source
-    where order_id    is not null
-      and customer_id is not null
-      and amount      > 0
+    where order_id      is not null
+      and customer_id   is not null
+      and quantity      > 0
+      and price         > 0
 )
 
 select * from cleaned

@@ -2,20 +2,28 @@ version: 2
 
 models:
   - name: stg_orders
-    description: "Cleaned and type-cast orders from Nessie raw source"
+    description: "Cleaned orders from raw source - matches Java API CreateOrderRequest schema"
     columns:
       - name: order_id
+        description: "Unique order identifier"
         data_tests:
           - not_null
           - unique
       - name: customer_id
+        description: "Customer identifier"
         data_tests:
           - not_null
-      - name: amount
+      - name: product_name
+        description: "Product name trimmed"
         data_tests:
           - not_null
-      - name: status
+      - name: quantity
+        description: "Units ordered, must be > 0"
         data_tests:
-          - accepted_values:
-              values: ["completed", "pending", "cancelled"]
-
+          - not_null
+      - name: price
+        description: "Unit price DECIMAL(10,2), must be > 0"
+        data_tests:
+          - not_null
+      - name: order_timestamp
+        description: "Order placement timestamp"

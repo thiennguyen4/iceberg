@@ -2,29 +2,26 @@ version: 2
 
 sources:
   - name: hive_raw
-    description: "Raw data tables stored in Hive Iceberg catalog (s3://warehouse/)"
+    description: "Raw orders table created by Java API / seed task via Spark Iceberg"
     schema: sales
     tables:
       - name: orders
-        description: "Raw orders ingested by Spark into Hive catalog"
+        description: "Raw orders ingested by Spring Boot OrderService into Hive Iceberg catalog"
         columns:
           - name: order_id
-            description: "Unique order identifier"
+            description: "Unique order identifier (STRING)"
             data_tests:
               - not_null
               - unique
           - name: customer_id
-            description: "Customer identifier"
+            description: "Customer identifier (STRING)"
             data_tests:
               - not_null
-          - name: order_time
+          - name: product_name
+            description: "Name of the product ordered"
+          - name: quantity
+            description: "Number of units ordered"
+          - name: price
+            description: "Unit price in DECIMAL(10,2)"
+          - name: order_timestamp
             description: "Timestamp when order was placed"
-          - name: amount
-            description: "Order total amount in decimal"
-          - name: status
-            description: "Order status: completed | pending | cancelled"
-          - name: created_at
-            description: "Record creation timestamp"
-
-
-

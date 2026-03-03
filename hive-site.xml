@@ -97,6 +97,16 @@
   </property>
 
   <property>
+    <name>datanucleus.query.sql.allowAll</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <name>datanucleus.rdbms.useDefaultSqlDate</name>
+    <value>false</value>
+  </property>
+
+  <property>
     <name>datanucleus.schema.autoCreateAll</name>
     <value>true</value>
   </property>

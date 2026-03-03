@@ -13,6 +13,8 @@ source:
       dbtUpdateDescriptions: true
       includeTags: true
       dbtClassificationName: dbt_tags
+      databaseServiceNames:
+        - iceberg-hive-catalog
 sink:
   type: metadata-rest
   config: {}

@@ -71,27 +71,26 @@ def seed_nessie_orders(**_) -> None:
             *[f"CREATE NAMESPACE IF NOT EXISTS demo.{ns}" for ns in REST_NAMESPACES],
             """
             CREATE TABLE IF NOT EXISTS demo.sales.orders (
-                order_id    BIGINT,
-                customer_id BIGINT,
-                order_time  TIMESTAMP,
-                amount      DECIMAL(10, 2),
-                status      STRING,
-                created_at  TIMESTAMP
+                order_id        STRING,
+                customer_id     STRING,
+                product_name    STRING,
+                quantity        INT,
+                price           DECIMAL(10, 2),
+                order_timestamp TIMESTAMP
             )
             USING iceberg
-            PARTITIONED BY (days(order_time))
+            PARTITIONED BY (days(order_timestamp))
             """,
-            "DELETE FROM demo.sales.orders",
             """
-            INSERT INTO demo.sales.orders VALUES
-            (1, 101, TIMESTAMP '2026-02-01 10:00:00', 100.50, 'completed', current_timestamp()),
-            (2, 102, TIMESTAMP '2026-02-01 11:00:00', 200.00, 'completed', current_timestamp()),
-            (3, 103, TIMESTAMP '2026-02-02 09:00:00', 150.75, 'pending',   current_timestamp()),
-            (4, 101, TIMESTAMP '2026-02-02 14:00:00', 300.00, 'completed', current_timestamp()),
-            (5, 104, TIMESTAMP '2026-02-03 08:00:00',  50.00, 'cancelled', current_timestamp()),
-            (6, 102, TIMESTAMP '2026-02-03 10:00:00', 175.25, 'completed', current_timestamp()),
-            (7, 105, TIMESTAMP '2026-02-03 12:00:00', 225.00, 'completed', current_timestamp()),
-            (8, 103, TIMESTAMP '2026-02-04 09:30:00',  80.00, 'pending',   current_timestamp())
+            INSERT OVERWRITE demo.sales.orders VALUES
+            ('ORD-001', 'CUST-101', 'Laptop',      2, 999.99,  TIMESTAMP '2026-02-01 10:00:00'),
+            ('ORD-002', 'CUST-102', 'Mouse',        5,  29.99,  TIMESTAMP '2026-02-01 11:00:00'),
+            ('ORD-003', 'CUST-103', 'Keyboard',     1,  79.99,  TIMESTAMP '2026-02-02 09:00:00'),
+            ('ORD-004', 'CUST-101', 'Monitor',      1, 399.99,  TIMESTAMP '2026-02-02 14:00:00'),
+            ('ORD-005', 'CUST-104', 'USB Hub',      3,  19.99,  TIMESTAMP '2026-02-03 08:00:00'),
+            ('ORD-006', 'CUST-102', 'Webcam',       1,  89.99,  TIMESTAMP '2026-02-03 10:00:00'),
+            ('ORD-007', 'CUST-105', 'Headphones',   1, 149.99,  TIMESTAMP '2026-02-03 12:00:00'),
+            ('ORD-008', 'CUST-103', 'Desk Lamp',    2,  34.99,  TIMESTAMP '2026-02-04 09:30:00')
             """,
         ]
     )

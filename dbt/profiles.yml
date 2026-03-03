@@ -6,7 +6,7 @@ hive_spark:
       method: thrift
       host: spark-iceberg
       port: 10000
-      schema: dbt_staging
+      schema: default
       threads: 2
       connect_timeout: 60
       connect_retries: 3
@@ -15,7 +15,7 @@ hive_spark:
         "spark.sql.catalog.demo": "org.apache.iceberg.spark.SparkCatalog"
         "spark.sql.catalog.demo.catalog-impl": "org.apache.iceberg.hive.HiveCatalog"
         "spark.sql.catalog.demo.uri": "thrift://hive-metastore:9083"
-        "spark.sql.catalog.demo.warehouse": "s3://warehouse/"
+        "spark.sql.catalog.demo.warehouse": "s3a://warehouse/"
         "spark.sql.catalog.demo.io-impl": "org.apache.iceberg.aws.s3.S3FileIO"
         "spark.sql.catalog.demo.s3.endpoint": "http://minio:9000"
         "spark.sql.catalog.demo.s3.access-key-id": "admin"
