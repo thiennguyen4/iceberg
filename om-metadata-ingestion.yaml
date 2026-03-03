@@ -1,14 +1,14 @@
 source:
   type: Iceberg
-  serviceName: iceberg-rest-catalog
+  serviceName: iceberg-hive-catalog
   serviceConnection:
     config:
       type: Iceberg
       catalog:
-        name: rest
+        name: hive
         connection:
-          type: RestCatalogConnection
-          uri: http://rest:8181
+          type: HiveCatalogConnection
+          metastoreUri: thrift://hive-metastore:9083
           warehouse: s3://warehouse/
       fileSystem:
         securityConfig:
@@ -39,4 +39,3 @@ workflowConfig:
   openMetadataServerConfig:
     hostPort: http://openmetadata:8585/api
     authProvider: no-auth
-

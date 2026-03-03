@@ -17,28 +17,19 @@ public class SparkConfig {
     private String master;
 
     @Value("${spark.sql.catalog.demo.uri}")
-    private String catalogUri;
+    private String metastoreUri;
 
     @Value("${spark.sql.catalog.demo.warehouse}")
     private String warehouse;
 
-    @Value("${spark.sql.catalog.demo.s3.endpoint}")
+    @Value("${iceberg.s3.endpoint}")
     private String s3Endpoint;
 
-    @Value("${spark.sql.catalog.demo.s3.access-key-id}")
+    @Value("${iceberg.s3.access-key}")
     private String s3AccessKey;
 
-    @Value("${spark.sql.catalog.demo.s3.secret-access-key}")
+    @Value("${iceberg.s3.secret-key}")
     private String s3SecretKey;
-
-    @Value("${nessie.catalog.uri}")
-    private String nessieCatalogUri;
-
-    @Value("${nessie.catalog.ref}")
-    private String nessieCatalogRef;
-
-    @Value("${nessie.catalog.warehouse}")
-    private String nessieCatalogWarehouse;
 
     @Bean
     public SparkSession sparkSession() {
@@ -46,45 +37,20 @@ public class SparkConfig {
                 .setAppName(appName)
                 .setMaster(master)
                 .set("spark.ui.enabled", "false")
-
-                // Iceberg Configuration
-//                .set("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-                .set("spark.sql.extensions",
-                        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions," +
-                                "org.projectnessie.spark.extensions.NessieSparkSessionExtensions")
+                .set("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
                 .set("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog")
-                .set("spark.sql.catalog.demo.type", "rest")
-                .set("spark.sql.catalog.demo.uri", catalogUri)
-                .set("spark.sql.catalog.demo.warehouse", warehouse) // Point to S3 bucket
-                .set("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") // Use S3FileIO for S3 access
-
-                // S3 Configuration for Iceberg
+                .set("spark.sql.catalog.demo.catalog-impl", "org.apache.iceberg.hive.HiveCatalog")
+                .set("spark.sql.catalog.demo.uri", metastoreUri)
+                .set("spark.sql.catalog.demo.warehouse", warehouse)
+                .set("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
                 .set("spark.sql.catalog.demo.s3.endpoint", s3Endpoint)
                 .set("spark.sql.catalog.demo.s3.access-key-id", s3AccessKey)
                 .set("spark.sql.catalog.demo.s3.secret-access-key", s3SecretKey)
                 .set("spark.sql.catalog.demo.s3.path-style-access", "true")
-                .set("spark.sql.defaultCatalog", "demo")
-                .set("spark.hadoop.fs.s3a.endpoint", s3Endpoint)
-                .set("spark.hadoop.fs.s3a.access.key", s3AccessKey)
-                .set("spark.hadoop.fs.s3a.secret.key", s3SecretKey)
-                .set("spark.hadoop.fs.s3a.path.style.access", "true")
-                .set("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-                .set("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-
-                // Nessie Catalog
-                .set("spark.sql.catalog.nessie", "org.apache.iceberg.spark.SparkCatalog")
-                .set("spark.sql.catalog.nessie.catalog-impl", "org.apache.iceberg.nessie.NessieCatalog")
-                .set("spark.sql.catalog.nessie.uri", nessieCatalogUri)
-                .set("spark.sql.catalog.nessie.ref", nessieCatalogRef)
-                .set("spark.sql.catalog.nessie.warehouse", nessieCatalogWarehouse)
-                .set("spark.sql.catalog.nessie.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
-                .set("spark.sql.catalog.nessie.s3.endpoint", s3Endpoint)
-                .set("spark.sql.catalog.nessie.s3.access-key-id", s3AccessKey)
-                .set("spark.sql.catalog.nessie.s3.secret-access-key", s3SecretKey)
-                .set("spark.sql.catalog.nessie.s3.path-style-access", "true")
-                .set("spark.sql.catalog.nessie.s3.access-grants-enabled", "false")
-                .set("spark.sql.catalog.nessie.client.region", "us-east-1");
-
+                .set("spark.sql.catalog.demo.s3.ssl-enabled", "false")
+                .set("spark.hadoop.iceberg.engine.hive.lock-enabled", "false")
+                .set("iceberg.engine.hive.lock-enabled", "false")
+                .set("spark.sql.defaultCatalog", "demo");
 
         return SparkSession.builder()
                 .config(conf)

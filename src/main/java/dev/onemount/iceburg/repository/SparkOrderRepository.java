@@ -40,8 +40,6 @@ public class SparkOrderRepository implements OrderRepository {
                 "CREATE NAMESPACE IF NOT EXISTS %s.%s",
                 icebergTableConfig.getActiveCatalog(), NAMESPACE
         );
-
-        log.debug("Executing SQL: {}", createNamespaceSql);
         sparkSession.sql(createNamespaceSql);
         log.info("Namespace '{}.{}' ensured to exist", icebergTableConfig.getActiveCatalog(), NAMESPACE);
     }
@@ -60,10 +58,8 @@ public class SparkOrderRepository implements OrderRepository {
                 fullTableName(),
                 icebergTableConfig.getTableProperties()
         );
-
-        log.debug("Executing SQL: {}", createTableSql);
         sparkSession.sql(createTableSql);
-        log.info("Table '{}' ensured to exist with format: {}", fullTableName(), icebergTableConfig.getWriteFormat());
+        log.info("Table '{}' ensured to exist", fullTableName());
     }
 
     @Override

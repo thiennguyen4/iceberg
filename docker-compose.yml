@@ -5,9 +5,10 @@
       networks:
         iceberg_net:
       depends_on:
-        - rest
-        - minio
-        - nessie
+        hive-metastore:
+          condition: service_healthy
+        minio:
+          condition: service_started
       volumes:
         - ./warehouse:/home/iceberg/warehouse
         - ./notebooks:/home/iceberg/notebooks/notebooks
@@ -20,21 +21,75 @@
         - 8888:8888
         - 10000:10000
         - 10001:10001
-    rest:
-      image: apache/iceberg-rest-fixture
-      container_name: iceberg-rest
+#    rest:
+#      image: apache/iceberg-rest-fixture
+#      container_name: iceberg-rest
+#      networks:
+#        iceberg_net:
+#      ports:
+#        - 8181:8181
+#      environment:
+#        - AWS_ACCESS_KEY_ID=admin
+#        - AWS_SECRET_ACCESS_KEY=password
+#        - AWS_REGION=us-east-1
+#        - CATALOG_WAREHOUSE=s3://warehouse/
+#        - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+#        - CATALOG_S3_ENDPOINT=http://minio:9000
+
+    hive-postgres:
+      image: postgres:10
+      container_name: hive-postgres
       networks:
         iceberg_net:
-      ports:
-        - 8181:8181
       environment:
-        - AWS_ACCESS_KEY_ID=admin
-        - AWS_SECRET_ACCESS_KEY=password
-        - AWS_REGION=us-east-1
-        - CATALOG_WAREHOUSE=s3://warehouse/
-        - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
-        - CATALOG_S3_ENDPOINT=http://minio:9000
-  
+        POSTGRES_DB: metastore_db
+        POSTGRES_USER: hive
+        POSTGRES_PASSWORD: hive
+        POSTGRES_HOST_AUTH_METHOD: md5
+        POSTGRES_INITDB_ARGS: "--auth-host=md5 --auth-local=md5"
+      volumes:
+        - hive_postgres:/var/lib/postgresql/data
+      healthcheck:
+        test: [ "CMD-SHELL", "pg_isready -U hive -d metastore_db" ]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+        start_period: 30s
+
+    hive-metastore:
+      image: apache/hive:3.1.3
+      container_name: hive-metastore
+      networks:
+        iceberg_net:
+      depends_on:
+        hive-postgres:
+          condition: service_healthy
+        mc:
+          condition: service_completed_successfully
+      ports:
+        - "9083:9083"
+      environment:
+        HIVE_CONF_DIR: /opt/hive/conf
+        SERVICE_NAME: metastore
+      volumes:
+        - ./hive-site.xml:/opt/hive/conf/hive-site.xml
+        - ./drivers/postgresql-42.7.3.jar:/opt/hive/lib/postgresql-42.7.3.jar
+        - ./drivers/hadoop-aws-3.1.1.jar:/opt/hive/lib/hadoop-aws-3.1.1.jar
+        - ./drivers/aws-java-sdk-bundle-1.11.271.jar:/opt/hive/lib/aws-java-sdk-bundle-1.11.271.jar
+      entrypoint: /bin/bash
+      command:
+        - -c
+        - |
+          export HADOOP_CLASSPATH="/opt/hive/lib/postgresql-42.7.3.jar:/opt/hive/lib/hadoop-aws-3.1.1.jar:/opt/hive/lib/aws-java-sdk-bundle-1.11.271.jar"
+          /opt/hive/bin/schematool -dbType postgres -initOrUpgradeSchema --verbose || true
+          exec /opt/hive/bin/hive --service metastore
+      healthcheck:
+        test: [ "CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9083' 2>/dev/null && echo OK || exit 1" ]
+        interval: 15s
+        timeout: 10s
+        retries: 10
+        start_period: 90s
+
     minio:
       image: minio/minio
       container_name: minio
@@ -69,7 +124,6 @@
         /usr/bin/mc policy set public minio/warehouse;
         /usr/bin/mc mb --ignore-existing minio/nessie;
         /usr/bin/mc policy set public minio/nessie;
-        tail -f /dev/null
         "
   
     openmetadata-mysql:
@@ -86,7 +140,7 @@
         MYSQL_PASSWORD: openmetadata
       volumes:
         - openmetadata_mysql:/var/lib/mysql
-        - ./mysql_init.sql:/docker-entrypoint-initdb.d/mysql_init.sql
+        - ./mysql_init.sql:/docker-entrypoint-initdb.d/01-mysql_init.sql
       healthcheck:
         test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "openmetadata", "-popenmetadata" ]
         interval: 10s
@@ -196,7 +250,7 @@
         - airflow-dags:/opt/airflow/dags
         - ./om-metadata-ingestion.yaml:/tmp/om-metadata-ingestion.yaml
         - ./om-dbt-ingestion.yaml:/tmp/om-dbt-ingestion.yaml
-        - ./dbt-airflow-dag.py:/opt/airflow/dags/dbt_nessie_transform_lineage.py
+        - ./dbt-airflow-dag.py:/opt/airflow/dags/dbt_hive_transform_lineage.py
         - ./dbt:/opt/dbt/nessie_transform
       healthcheck:
         test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
@@ -209,72 +263,74 @@
         airflow db migrate &&
         airflow standalone
         "
-    dremio:
-      image: dremio/dremio-oss:latest
-      container_name: dremio
-      networks:
-        iceberg_net:
-      ports:
-        - "9047:9047"
-        - "31010:31010"
-        - "45678:45678"
-      volumes:
-        - dremio-data:/opt/dremio/data
-      environment:
-        - DREMIO_MAX_MEMORY_SIZE_MB=4096
-      healthcheck:
-        test: [ "CMD", "curl", "-f", "http://localhost:9047" ]
-        interval: 30s
-        timeout: 10s
-        retries: 10
+#    dremio:
+#      image: dremio/dremio-oss:latest
+#      container_name: dremio
+#      networks:
+#        iceberg_net:
+#      ports:
+#        - "9047:9047"
+#        - "31010:31010"
+#        - "45678:45678"
+#      volumes:
+#        - dremio-data:/opt/dremio/data
+#      environment:
+#        - DREMIO_MAX_MEMORY_SIZE_MB=4096
+#      healthcheck:
+#        test: [ "CMD", "curl", "-f", "http://localhost:9047" ]
+#        interval: 30s
+#        timeout: 10s
+#        retries: 10
   
-    cube:
-      image: cubejs/cube:latest
-      container_name: cube
-      networks:
-        iceberg_net:
-      ports:
-        - "4000:4000"
-      depends_on:
-        dremio:
-          condition: service_healthy
-      environment:
-        - CUBEJS_DB_TYPE=dremio
-        - CUBEJS_DB_HOST=dremio
-        - CUBEJS_DB_PORT=9047
-        - CUBEJS_DB_USER=admin
-        - CUBEJS_DB_PASS=dremio123
-        - CUBEJS_API_SECRET=demo_secret_key_cube_dremio_2026
-        - CUBEJS_DEV_MODE=true
-        - CUBEJS_WEB_SOCKETS=true
-        - CUBEJS_TELEMETRY=false
-        - CUBEJS_SCHEMA_PATH=model
-        - NODE_ENV=development
-      volumes:
-        - ./cube/schema:/cube/conf/model
+#    cube:
+#      image: cubejs/cube:latest
+#      container_name: cube
+#      networks:
+#        iceberg_net:
+#      ports:
+#        - "4000:4000"
+#      depends_on:
+#        dremio:
+#          condition: service_healthy
+#      environment:
+#        - CUBEJS_DB_TYPE=dremio
+#        - CUBEJS_DB_HOST=dremio
+#        - CUBEJS_DB_PORT=9047
+#        - CUBEJS_DB_USER=admin
+#        - CUBEJS_DB_PASS=dremio123
+#        - CUBEJS_API_SECRET=demo_secret_key_cube_dremio_2026
+#        - CUBEJS_DEV_MODE=true
+#        - CUBEJS_WEB_SOCKETS=true
+#        - CUBEJS_TELEMETRY=false
+#        - CUBEJS_SCHEMA_PATH=model
+#        - NODE_ENV=development
+#      volumes:
+#        - ./cube/schema:/cube/conf/model
   
-    nessie:
-      image: ghcr.io/projectnessie/nessie:0.99.0
-      container_name: nessie
-      networks:
-        iceberg_net:
-      ports:
-        - "19120:19120"
-      environment:
-        - nessie.version.store.type=IN_MEMORY
-        - quarkus.http.port=19120
-      healthcheck:
-        test: [ "CMD", "curl", "-f", "http://localhost:19120/api/v2/config" ]
-        interval: 10s
-        timeout: 5s
-        retries: 10
-        start_period: 30s
+#    nessie:
+#      image: ghcr.io/projectnessie/nessie:0.99.0
+#      container_name: nessie
+#      networks:
+#        iceberg_net:
+#      ports:
+#        - "19120:19120"
+#      environment:
+#        - nessie.version.store.type=IN_MEMORY
+#        - quarkus.http.port=19120
+#      healthcheck:
+#        test: [ "CMD", "curl", "-f", "http://localhost:19120/api/v2/config" ]
+#        interval: 10s
+#        timeout: 5s
+#        retries: 10
+#        start_period: 30s
   
   volumes:
     openmetadata_mysql:
     openmetadata_es:
     airflow-dags:
-    dremio-data:
-  
+#    dremio-data:
+    hive-warehouse:
+    hive_postgres:
+
   networks:
     iceberg_net:

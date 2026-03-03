@@ -1,11 +1,3 @@
-{{
-    config(
-        materialized  = 'table',
-        file_format   = 'iceberg',
-        location_root = 's3://nessie/dbt_mart',
-        schema        = 'dbt_mart'
-    )
-}}
 
 with completed_orders as (
     select * from {{ ref('stg_orders') }}

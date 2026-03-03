@@ -1,6 +1,6 @@
 source:
   type: dbt
-  serviceName: iceberg-rest-catalog
+  serviceName: iceberg-hive-catalog
   sourceConfig:
     config:
       type: DBT

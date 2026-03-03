@@ -20,26 +20,27 @@ DEFAULT_ARGS = {
     "retry_delay": timedelta(minutes=2),
 }
 
-OM_SERVICE_NAME = "iceberg-rest-catalog"
+OM_SERVICE_NAME = "iceberg-hive-catalog"
 OM_INGESTION_WAIT_SEC = 120
 OM_INGESTION_POLL_SEC = 5
 
 SPARK_THRIFT_CONF = {
     "spark.sql.extensions": (
-        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions,"
-        "org.projectnessie.spark.extensions.NessieSparkSessionExtensions"
+        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
     ),
-    "spark.sql.catalog.nessie": "org.apache.iceberg.spark.SparkCatalog",
-    "spark.sql.catalog.nessie.catalog-impl": "org.apache.iceberg.nessie.NessieCatalog",
-    "spark.sql.catalog.nessie.uri": "http://nessie:19120/api/v2",
-    "spark.sql.catalog.nessie.ref": "main",
-    "spark.sql.catalog.nessie.warehouse": "s3://nessie/",
-    "spark.sql.catalog.nessie.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
-    "spark.sql.catalog.nessie.s3.endpoint": "http://minio:9000",
-    "spark.sql.catalog.nessie.s3.access-key-id": "admin",
-    "spark.sql.catalog.nessie.s3.secret-access-key": "password",
-    "spark.sql.catalog.nessie.s3.path-style-access": "true",
-    "spark.sql.defaultCatalog": "nessie",
+    "spark.sql.catalog.demo": "org.apache.iceberg.spark.SparkCatalog",
+    "spark.sql.catalog.demo.catalog-impl": "org.apache.iceberg.hive.HiveCatalog",
+    "spark.sql.catalog.demo.uri": "thrift://hive-metastore:9083",
+    "spark.sql.catalog.demo.warehouse": "s3a://warehouse/",
+    "spark.sql.catalog.demo.io-impl": "org.apache.iceberg.aws.s3.S3FileIO",
+    "spark.sql.catalog.demo.s3.endpoint": "http://minio:9000",
+    "spark.sql.catalog.demo.s3.access-key-id": "admin",
+    "spark.sql.catalog.demo.s3.secret-access-key": "password",
+    "spark.sql.catalog.demo.s3.path-style-access": "true",
+    "spark.sql.defaultCatalog": "demo",
+    "spark.sql.adaptive.enabled": "false",
+    "spark.sql.iceberg.handle-timestamp-without-timezone": "true",
+    "spark.sql.catalog.demo.cache-enabled": "false",
 }
 
 def _execute_sqls(sqls: list[str], database: str | None = None) -> None:
@@ -62,33 +63,27 @@ def _execute_sqls(sqls: list[str], database: str | None = None) -> None:
     conn.close()
 
 
-NESSIE_API_URL = "http://nessie:19120/api/v2"
-NESSIE_BRANCH = "main"
-NESSIE_NAMESPACES = ["default", "dbt_staging", "dbt_mart"]
+REST_NAMESPACES = ["sales", "dbt_staging", "dbt_mart"]
 
 def seed_nessie_orders(**_) -> None:
-    namespace_sqls = [
-        f"CREATE NAMESPACE IF NOT EXISTS nessie.{ns}"
-        for ns in NESSIE_NAMESPACES
-    ]
-    _execute_sqls(namespace_sqls)
-
     _execute_sqls(
         [
+            *[f"CREATE NAMESPACE IF NOT EXISTS demo.{ns}" for ns in REST_NAMESPACES],
             """
-            CREATE TABLE IF NOT EXISTS nessie.default.orders (
-                                                                 order_id    BIGINT,
-                                                                 customer_id BIGINT,
-                                                                 order_time  TIMESTAMP,
-                                                                 amount      DECIMAL(10, 2),
+            CREATE TABLE IF NOT EXISTS demo.sales.orders (
+                order_id    BIGINT,
+                customer_id BIGINT,
+                order_time  TIMESTAMP,
+                amount      DECIMAL(10, 2),
                 status      STRING,
                 created_at  TIMESTAMP
-                )
-                USING iceberg
-                PARTITIONED BY (days(order_time))
+            )
+            USING iceberg
+            PARTITIONED BY (days(order_time))
             """,
+            "DELETE FROM demo.sales.orders",
             """
-            INSERT OVERWRITE nessie.default.orders VALUES
+            INSERT INTO demo.sales.orders VALUES
             (1, 101, TIMESTAMP '2026-02-01 10:00:00', 100.50, 'completed', current_timestamp()),
             (2, 102, TIMESTAMP '2026-02-01 11:00:00', 200.00, 'completed', current_timestamp()),
             (3, 103, TIMESTAMP '2026-02-02 09:00:00', 150.75, 'pending',   current_timestamp()),
@@ -100,7 +95,7 @@ def seed_nessie_orders(**_) -> None:
             """,
         ]
     )
-    print("Seeded nessie.default.orders successfully")
+    print("Seeded demo.sales.orders successfully")
 
 def _get_om_token() -> str:
     resp = requests.post(
@@ -181,15 +176,15 @@ def trigger_om_dbt_ingestion(**_) -> None:
 
 
 @dag(
-    dag_id="dbt_nessie_transform_lineage",
+    dag_id="dbt_hive_transform_lineage",
     default_args=DEFAULT_ARGS,
-    description="dbt transform Nessie Iceberg tables + auto lineage via OpenMetadata dbt ingestion",
+    description="dbt transform Hive Iceberg tables + auto lineage via OpenMetadata dbt ingestion",
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
-    tags=["dbt", "nessie", "iceberg", "lineage"],
+    tags=["dbt", "hive", "iceberg", "lineage"],
 )
-def dbt_nessie_pipeline():
+def dbt_hive_pipeline():
     seed_nessie_data = PythonOperator(
         task_id="seed_nessie_raw_orders",
         python_callable=seed_nessie_orders,
@@ -263,4 +258,4 @@ def dbt_nessie_pipeline():
     )
 
 
-dbt_nessie_pipeline()
+dbt_hive_pipeline()

@@ -28,7 +28,7 @@ public class DbtService {
     @Value("${airflow.password:admin}")
     private String airflowPassword;
 
-    private static final String DAG_ID = "dbt_nessie_transform_lineage";
+    private static final String DAG_ID = "dbt_hive_transform_lineage";
 
     public DbtFlowResponse triggerDbtFlow() {
         HttpHeaders headers = buildAirflowHeaders();
@@ -45,7 +45,7 @@ public class DbtService {
                 String.class
         );
 
-        log.info("Triggered dbt Nessie DAG: dagRunId={}", runId);
+        log.info("Triggered dbt Hive DAG: dagRunId={}", runId);
 
         return DbtFlowResponse.builder()
                 .success(true)
@@ -53,13 +53,13 @@ public class DbtService {
                 .dagRunId(runId)
                 .dagId(DAG_ID)
                 .details(DbtFlowResponse.DbtFlowDetails.builder()
-                        .sourceTable("nessie.default.orders")
-                        .stagingModel("nessie.dbt_staging.stg_orders")
-                        .martModel("nessie.dbt_mart.mart_daily_revenue")
-                        .sourceBucket("s3://nessie/default/")
-                        .targetBucket("s3://nessie/dbt_mart/")
+                        .sourceTable("demo.sales.orders")
+                        .stagingModel("demo.dbt_staging.stg_orders")
+                        .martModel("demo.dbt_mart.mart_daily_revenue")
+                        .sourceBucket("s3://warehouse/sales/")
+                        .targetBucket("s3://warehouse/dbt_mart/")
                         .lineageStatus("Pending - running in Airflow")
-                        .airflowUrl("http://localhost:8080/dags/dbt_nessie_transform_lineage")
+                        .airflowUrl("http://localhost:8080/dags/dbt_hive_transform_lineage")
                         .openMetadataUrl("http://localhost:8585/explore/tables")
                         .build())
                 .build();

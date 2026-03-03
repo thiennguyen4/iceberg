@@ -2,7 +2,7 @@ version: 2
 
 models:
   - name: mart_daily_revenue
-    description: "Daily revenue aggregation for completed orders - stored in s3://nessie/dbt_mart/"
+    description: "Daily revenue aggregation for completed orders - stored in s3://warehouse/dbt_mart/"
     columns:
       - name: order_date
         description: "Business date"

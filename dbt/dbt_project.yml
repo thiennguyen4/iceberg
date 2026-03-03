@@ -2,7 +2,7 @@ name: nessie_transform
 version: "1.0.0"
 config-version: 2
 
-profile: nessie_spark
+profile: hive_spark
 
 model-paths: ["models"]
 test-paths: ["tests"]
@@ -15,9 +15,11 @@ models:
     staging:
       +materialized: table
       +file_format: iceberg
+      +schema: dbt_staging
     mart:
       +materialized: table
       +file_format: iceberg
+      +schema: dbt_mart
       +table_properties:
         write.format.default: parquet
         write.parquet.compression-codec: zstd
