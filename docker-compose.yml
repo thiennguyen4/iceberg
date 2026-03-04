@@ -238,6 +238,15 @@
         AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
         OPENMETADATA_ELASTICSEARCH_HOST: openmetadata-elasticsearch
         AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS: "admin:admin"
+        AWS_ACCESS_KEY_ID: admin
+        AWS_SECRET_ACCESS_KEY: password
+        AWS_REGION: us-east-1
+        AWS_DEFAULT_REGION: us-east-1
+        PYICEBERG_CATALOG__DEFAULT__URI: thrift://hive-metastore:9083
+        PYICEBERG_CATALOG__DEFAULT__S3__ENDPOINT: http://minio:9000
+        PYICEBERG_CATALOG__DEFAULT__S3__ACCESS_KEY_ID: admin
+        PYICEBERG_CATALOG__DEFAULT__S3__SECRET_ACCESS_KEY: password
+        PYICEBERG_CATALOG__DEFAULT__S3__PATH_STYLE_ACCESS: "true"
       ports:
         - "8080:8080"
       restart: on-failure
@@ -248,6 +257,8 @@
         - ./dbt-airflow-dag.py:/opt/airflow/dags/dbt_hive_transform_lineage.py
         - ./dbt:/opt/dbt/nessie_transform
         - ./om_create_pipelines.py:/opt/om_create_pipelines.py
+        - airflow-dag-configs:/opt/airflow/dag_generated_configs
+        - ./om-metadata-ingestion.yaml:/tmp/om-metadata-ingestion.yaml
       healthcheck:
         test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
         interval: 30s
@@ -327,6 +338,7 @@
 #    dremio-data:
     hive-warehouse:
     hive_postgres:
+    airflow-dag-configs:
 
   networks:
     iceberg_net:

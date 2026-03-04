@@ -21,8 +21,8 @@ DEFAULT_ARGS = {
 }
 
 OM_SERVICE_NAME = "iceberg-hive-catalog"
-OM_INGESTION_WAIT_SEC = 120
-OM_INGESTION_POLL_SEC = 5
+OM_INGESTION_WAIT_SEC = 180
+OM_INGESTION_POLL_SEC = 10
 
 SPARK_THRIFT_CONF = {
     "spark.sql.extensions": (
@@ -130,34 +130,80 @@ def _get_pipeline_by_type(headers: dict, pipeline_type: str) -> dict:
 
 
 def _trigger_and_wait(headers: dict, pipeline_id: str, pipeline_type: str) -> None:
-    requests.post(
+    import time as _time
+
+    trigger_resp = requests.post(
         f"{OPENMETADATA_URL}/v1/services/ingestionPipelines/trigger/{pipeline_id}",
         headers=headers,
         timeout=10,
-    ).raise_for_status()
+    )
+    trigger_resp.raise_for_status()
     print(f"Triggered {pipeline_type} ingestion pipeline: {pipeline_id}")
 
-    elapsed = 0
+    _time.sleep(20)
+    elapsed = 20
+    start_window_ms = int((_time.time() - 30) * 1000)
+
     while elapsed < OM_INGESTION_WAIT_SEC:
-        time.sleep(OM_INGESTION_POLL_SEC)
+        _time.sleep(OM_INGESTION_POLL_SEC)
         elapsed += OM_INGESTION_POLL_SEC
 
-        status_resp = requests.get(
-            f"{OPENMETADATA_URL}/v1/services/ingestionPipelines/{pipeline_id}",
-            headers=headers,
-            timeout=10,
-        )
-        status_resp.raise_for_status()
-        run_state = status_resp.json().get("pipelineStatuses", {}).get("pipelineState", "")
+        run_state = _get_run_state(headers, pipeline_id, start_window_ms)
         print(f"[{pipeline_type}] status after {elapsed}s: {run_state}")
 
-        if run_state in ("success", "partialSuccess"):
+        if run_state in ("success", "partialsuccess"):
             print(f"[{pipeline_type}] ingestion completed.")
             return
         if run_state == "failed":
-            raise RuntimeError(f"[{pipeline_type}] ingestion pipeline {pipeline_id} failed.")
+            raise RuntimeError(f"[{pipeline_type}] ingestion pipeline failed.")
 
     print(f"[{pipeline_type}] did not complete within {OM_INGESTION_WAIT_SEC}s, proceeding anyway.")
+
+
+def _get_run_state(headers: dict, pipeline_id: str, start_window_ms: int) -> str:
+    import time as _time
+
+    for url in [
+        f"{OPENMETADATA_URL}/v1/services/ingestionPipelines/{pipeline_id}/lastIngestionRuns",
+        f"{OPENMETADATA_URL}/v1/services/ingestionPipelines/{pipeline_id}"
+        f"/pipelineStatus?startTs={start_window_ms}&endTs={int(_time.time() * 1000)}&limit=1",
+    ]:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            runs = (
+                data.get("data", [])
+                if isinstance(data, dict) and "data" in data
+                else data if isinstance(data, list)
+                else []
+            )
+            if runs:
+                latest = sorted(
+                    runs,
+                    key=lambda x: x.get("timestamp", x.get("startDate", 0)),
+                    reverse=True,
+                )[0]
+                return latest.get("pipelineState", "").lower()
+        except Exception:
+            continue
+
+    try:
+        resp = requests.get(
+            f"{OPENMETADATA_URL}/v1/services/ingestionPipelines/{pipeline_id}"
+            "?fields=pipelineStatuses",
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            statuses = resp.json().get("pipelineStatuses", [])
+            if statuses:
+                return statuses[-1].get("pipelineState", "").lower()
+    except Exception:
+        pass
+
+    return ""
 
 
 def trigger_om_metadata_ingestion(**_) -> None:

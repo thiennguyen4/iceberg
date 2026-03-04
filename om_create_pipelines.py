@@ -61,6 +61,13 @@ def get_or_create_service(token):
                     },
                     "endPointURL": "http://minio:9000",
                 },
+                "connectionOptions": {
+                    "s3.endpoint": "http://minio:9000",
+                    "s3.access-key-id": "admin",
+                    "s3.secret-access-key": "password",
+                    "s3.path-style-access": "true",
+                    "client.region": "us-east-1",
+                },
             }
         },
     }
@@ -150,7 +157,7 @@ def main():
         f"{SERVICE_NAME}_metadata",
         {
             "type": "DatabaseMetadata",
-            "markDeletedTables": True,
+            "markDeletedTables": False,
             "includeTables": True,
             "includeViews": True,
         },
@@ -172,7 +179,7 @@ def main():
             "dbtUpdateDescriptions": True,
             "dbtUpdateOwners": True,
             "includeTags": True,
-            "databaseFilterPattern": {"includes": ["demo"]},
+            "searchAcrossDatabases": True,
         },
     )
 
