@@ -8,10 +8,15 @@ from airflow.decorators import dag
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
 
-DBT_PROJECT_DIR = "/opt/dbt/nessie_transform"
+DBT_PROJECT_DIR = "/opt/dbt/dbt_iceberg"
 OPENMETADATA_URL = "http://openmetadata:8585/api"
+OPENMETADATA_SERVICE_NAME = "iceberg-hive-catalog"
+
 SPARK_THRIFT_HOST = "spark-iceberg"
 SPARK_THRIFT_PORT = 10000
+
+INGESTION_WAIT_SEC = 180
+INGESTION_POLL_SEC = 10
 
 DEFAULT_ARGS = {
     "owner": "iceburg",
@@ -19,10 +24,6 @@ DEFAULT_ARGS = {
     "retries": 1,
     "retry_delay": timedelta(minutes=2),
 }
-
-OM_SERVICE_NAME = "iceberg-hive-catalog"
-OM_INGESTION_WAIT_SEC = 180
-OM_INGESTION_POLL_SEC = 10
 
 SPARK_THRIFT_CONF = {
     "spark.sql.extensions": (
@@ -43,7 +44,11 @@ SPARK_THRIFT_CONF = {
     "spark.sql.catalog.demo.cache-enabled": "false",
 }
 
+ICEBERG_NAMESPACES = ["sales", "dbt_staging", "dbt_mart"]
+
+
 def _execute_sqls(sqls: list[str], database: str | None = None) -> None:
+    """Open a Spark Thrift connection and execute each SQL statement in order."""
     from pyhive import hive
 
     kwargs = dict(
@@ -63,12 +68,11 @@ def _execute_sqls(sqls: list[str], database: str | None = None) -> None:
     conn.close()
 
 
-REST_NAMESPACES = ["sales", "dbt_staging", "dbt_mart"]
-
-def seed_nessie_orders(**_) -> None:
+def seed_orders(**_) -> None:
+    """Create the Iceberg sales.orders table and insert sample rows via Spark Thrift."""
     _execute_sqls(
         [
-            *[f"CREATE NAMESPACE IF NOT EXISTS demo.{ns}" for ns in REST_NAMESPACES],
+            *[f"CREATE NAMESPACE IF NOT EXISTS demo.{ns}" for ns in ICEBERG_NAMESPACES],
             """
             CREATE TABLE IF NOT EXISTS demo.sales.orders (
                 order_id        STRING,
@@ -96,7 +100,9 @@ def seed_nessie_orders(**_) -> None:
     )
     print("Seeded demo.sales.orders successfully")
 
-def _get_om_token() -> str:
+
+def _get_auth_token() -> str:
+    """Authenticate against OpenMetadata and return a Bearer access token."""
     resp = requests.post(
         f"{OPENMETADATA_URL}/v1/users/login",
         json={"email": "admin@open-metadata.org", "password": "YWRtaW4="},
@@ -106,10 +112,11 @@ def _get_om_token() -> str:
     return resp.json()["accessToken"]
 
 
-def _get_pipeline_by_type(headers: dict, pipeline_type: str) -> dict:
+def _get_ingestion_pipeline(headers: dict, pipeline_type: str) -> dict:
+    """Fetch the ingestion pipeline of a given type from OpenMetadata; raise if not found."""
     resp = requests.get(
         f"{OPENMETADATA_URL}/v1/services/ingestionPipelines"
-        f"?service={OM_SERVICE_NAME}&limit=25",
+        f"?service={OPENMETADATA_SERVICE_NAME}&limit=25",
         headers=headers,
         timeout=10,
     )
@@ -123,15 +130,14 @@ def _get_pipeline_by_type(headers: dict, pipeline_type: str) -> dict:
 
     if not pipeline:
         raise RuntimeError(
-            f"No '{pipeline_type}' ingestion pipeline found for service '{OM_SERVICE_NAME}'. "
+            f"No '{pipeline_type}' ingestion pipeline found for service '{OPENMETADATA_SERVICE_NAME}'. "
             f"Create it in OpenMetadata UI first."
         )
     return pipeline
 
 
-def _trigger_and_wait(headers: dict, pipeline_id: str, pipeline_type: str) -> None:
-    import time as _time
-
+def _trigger_ingestion_and_wait(headers: dict, pipeline_id: str, pipeline_type: str) -> None:
+    """Trigger an OpenMetadata ingestion pipeline and poll until it succeeds or times out."""
     trigger_resp = requests.post(
         f"{OPENMETADATA_URL}/v1/services/ingestionPipelines/trigger/{pipeline_id}",
         headers=headers,
@@ -140,15 +146,15 @@ def _trigger_and_wait(headers: dict, pipeline_id: str, pipeline_type: str) -> No
     trigger_resp.raise_for_status()
     print(f"Triggered {pipeline_type} ingestion pipeline: {pipeline_id}")
 
-    _time.sleep(20)
+    time.sleep(20)
     elapsed = 20
-    start_window_ms = int((_time.time() - 30) * 1000)
+    start_window_ms = int((time.time() - 30) * 1000)
 
-    while elapsed < OM_INGESTION_WAIT_SEC:
-        _time.sleep(OM_INGESTION_POLL_SEC)
-        elapsed += OM_INGESTION_POLL_SEC
+    while elapsed < INGESTION_WAIT_SEC:
+        time.sleep(INGESTION_POLL_SEC)
+        elapsed += INGESTION_POLL_SEC
 
-        run_state = _get_run_state(headers, pipeline_id, start_window_ms)
+        run_state = _get_ingestion_run_state(headers, pipeline_id, start_window_ms)
         print(f"[{pipeline_type}] status after {elapsed}s: {run_state}")
 
         if run_state in ("success", "partialsuccess"):
@@ -157,16 +163,15 @@ def _trigger_and_wait(headers: dict, pipeline_id: str, pipeline_type: str) -> No
         if run_state == "failed":
             raise RuntimeError(f"[{pipeline_type}] ingestion pipeline failed.")
 
-    print(f"[{pipeline_type}] did not complete within {OM_INGESTION_WAIT_SEC}s, proceeding anyway.")
+    print(f"[{pipeline_type}] did not complete within {INGESTION_WAIT_SEC}s, proceeding anyway.")
 
 
-def _get_run_state(headers: dict, pipeline_id: str, start_window_ms: int) -> str:
-    import time as _time
-
+def _get_ingestion_run_state(headers: dict, pipeline_id: str, start_window_ms: int) -> str:
+    """Poll the latest pipeline run state from OpenMetadata using two fallback endpoints."""
     for url in [
         f"{OPENMETADATA_URL}/v1/services/ingestionPipelines/{pipeline_id}/lastIngestionRuns",
         f"{OPENMETADATA_URL}/v1/services/ingestionPipelines/{pipeline_id}"
-        f"/pipelineStatus?startTs={start_window_ms}&endTs={int(_time.time() * 1000)}&limit=1",
+        f"/pipelineStatus?startTs={start_window_ms}&endTs={int(time.time() * 1000)}&limit=1",
     ]:
         try:
             resp = requests.get(url, headers=headers, timeout=10)
@@ -206,33 +211,35 @@ def _get_run_state(headers: dict, pipeline_id: str, start_window_ms: int) -> str
     return ""
 
 
-def trigger_om_metadata_ingestion(**_) -> None:
-    token = _get_om_token()
+def trigger_metadata_ingestion(**_) -> None:
+    """Authenticate, locate the metadata ingestion pipeline, and trigger it."""
+    token = _get_auth_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    pipeline = _get_pipeline_by_type(headers, "metadata")
-    _trigger_and_wait(headers, pipeline["id"], "metadata")
+    pipeline = _get_ingestion_pipeline(headers, "metadata")
+    _trigger_ingestion_and_wait(headers, pipeline["id"], "metadata")
 
 
-def trigger_om_dbt_ingestion(**_) -> None:
-    token = _get_om_token()
+def trigger_dbt_ingestion(**_) -> None:
+    """Authenticate, locate the dbt ingestion pipeline, and trigger it."""
+    token = _get_auth_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    pipeline = _get_pipeline_by_type(headers, "dbt")
-    _trigger_and_wait(headers, pipeline["id"], "dbt")
+    pipeline = _get_ingestion_pipeline(headers, "dbt")
+    _trigger_ingestion_and_wait(headers, pipeline["id"], "dbt")
 
 
 @dag(
-    dag_id="dbt_hive_transform_lineage",
+    dag_id="dbt_pipeline",
     default_args=DEFAULT_ARGS,
-    description="dbt transform Hive Iceberg tables + auto lineage via OpenMetadata dbt ingestion",
+    description="Seed raw orders → dbt staging & mart transforms → OpenMetadata lineage ingestion",
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=["dbt", "hive", "iceberg", "lineage"],
 )
-def dbt_hive_pipeline():
-    seed_nessie_data = PythonOperator(
-        task_id="seed_nessie_raw_orders",
-        python_callable=seed_nessie_orders,
+def dbt_pipeline():
+    seed_raw_orders = PythonOperator(
+        task_id="seed_raw_orders",
+        python_callable=seed_orders,
     )
 
     dbt_deps = BashOperator(
@@ -280,27 +287,27 @@ def dbt_hive_pipeline():
         ),
     )
 
-    om_metadata_ingestion = PythonOperator(
-        task_id="trigger_om_metadata_ingestion",
-        python_callable=trigger_om_metadata_ingestion,
+    metadata_ingestion = PythonOperator(
+        task_id="trigger_metadata_ingestion",
+        python_callable=trigger_metadata_ingestion,
     )
 
-    om_dbt_ingestion = PythonOperator(
-        task_id="trigger_om_dbt_ingestion",
-        python_callable=trigger_om_dbt_ingestion,
+    dbt_ingestion = PythonOperator(
+        task_id="trigger_dbt_ingestion",
+        python_callable=trigger_dbt_ingestion,
     )
 
     (
-        seed_nessie_data
+        seed_raw_orders
         >> dbt_deps
         >> dbt_run_staging
         >> dbt_test_staging
         >> dbt_run_mart
         >> dbt_test_mart
         >> dbt_docs
-        >> om_metadata_ingestion
-        >> om_dbt_ingestion
+        >> metadata_ingestion
+        >> dbt_ingestion
     )
 
 
-dbt_hive_pipeline()
+dbt_pipeline()

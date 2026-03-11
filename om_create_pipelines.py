@@ -1,16 +1,18 @@
+from typing import Optional
+
 import urllib.request
 import json
 import urllib.error
 import os
-import sys
 
-BASE = os.getenv("OPENMETADATA_URL", "http://localhost:8585/api")
+BASE_URL = os.getenv("OPENMETADATA_URL", "http://localhost:8585/api")
 SERVICE_NAME = "iceberg-hive-catalog"
 
 
-def login():
+def get_auth_token() -> str:
+    """Authenticate against OpenMetadata and return a Bearer access token."""
     req = urllib.request.Request(
-        f"{BASE}/v1/users/login",
+        f"{BASE_URL}/v1/users/login",
         data=json.dumps({"email": "admin@open-metadata.org", "password": "YWRtaW4="}).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -19,14 +21,15 @@ def login():
     return json.loads(resp.read())["accessToken"]
 
 
-def get_or_create_service(token):
+def get_or_create_service(token: str) -> str:
+    """Return the database service id, creating the Iceberg Hive service if it does not exist."""
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
     }
     try:
         req = urllib.request.Request(
-            f"{BASE}/v1/services/databaseServices/name/{SERVICE_NAME}",
+            f"{BASE_URL}/v1/services/databaseServices/name/{SERVICE_NAME}",
             headers=headers,
         )
         resp = urllib.request.urlopen(req, timeout=15)
@@ -72,7 +75,7 @@ def get_or_create_service(token):
         },
     }
     req = urllib.request.Request(
-        f"{BASE}/v1/services/databaseServices",
+        f"{BASE_URL}/v1/services/databaseServices",
         data=json.dumps(payload).encode(),
         headers=headers,
         method="POST",
@@ -83,76 +86,78 @@ def get_or_create_service(token):
     return svc["id"]
 
 
-def get_pipeline_id(token, svc_id, p_type):
+def find_pipeline_id(token: str, pipeline_type: str) -> Optional[str]:
+    """Return the id of an existing ingestion pipeline matching pipeline_type, or None."""
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
     }
     req = urllib.request.Request(
-        f"{BASE}/v1/services/ingestionPipelines?service={SERVICE_NAME}&limit=25",
+        f"{BASE_URL}/v1/services/ingestionPipelines?service={SERVICE_NAME}&limit=25",
         headers=headers,
     )
     resp = urllib.request.urlopen(req, timeout=15)
     pipelines = json.loads(resp.read()).get("data", [])
-    match = next((p for p in pipelines if p.get("pipelineType") == p_type), None)
+    match = next((p for p in pipelines if p.get("pipelineType") == pipeline_type), None)
     return match["id"] if match else None
 
 
-def create_or_update_pipeline(token, svc_id, p_type, p_name, source_config):
+def create_or_update_pipeline(token: str, service_id: str, pipeline_type: str, pipeline_name: str, source_config: dict) -> None:
+    """Delete any existing pipeline of the given type, then create a fresh one."""
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
     }
     payload = {
-        "name": p_name,
-        "pipelineType": p_type,
-        "service": {"id": svc_id, "type": "databaseService"},
+        "name": pipeline_name,
+        "pipelineType": pipeline_type,
+        "service": {"id": service_id, "type": "databaseService"},
         "sourceConfig": {"config": source_config},
         "airflowConfig": {"scheduleInterval": None},
     }
 
-    existing_id = get_pipeline_id(token, svc_id, p_type)
+    existing_id = find_pipeline_id(token, pipeline_type)
     if existing_id:
         del_req = urllib.request.Request(
-            f"{BASE}/v1/services/ingestionPipelines/{existing_id}?hardDelete=true",
+            f"{BASE_URL}/v1/services/ingestionPipelines/{existing_id}?hardDelete=true",
             headers=headers,
             method="DELETE",
         )
         urllib.request.urlopen(del_req, timeout=15)
-        print(f"[INFO] Deleted old '{p_type}' pipeline, recreating...")
+        print(f"[INFO] Deleted old '{pipeline_type}' pipeline, recreating...")
 
     req = urllib.request.Request(
-        f"{BASE}/v1/services/ingestionPipelines",
+        f"{BASE_URL}/v1/services/ingestionPipelines",
         data=json.dumps(payload).encode(),
         headers=headers,
         method="POST",
     )
-    action = "Created"
 
     try:
         resp = urllib.request.urlopen(req, timeout=15)
         result = json.loads(resp.read())
-        print(f"[OK] {action} '{p_type}' pipeline: {result['name']} | id={result['id']}")
+        print(f"[OK] Created '{pipeline_type}' pipeline: {result['name']} | id={result['id']}")
     except urllib.error.HTTPError as e:
         body = e.read().decode()
-        print(f"[ERR] '{p_type}' pipeline HTTP {e.code}: {body[:300]}")
+        print(f"[ERR] '{pipeline_type}' pipeline HTTP {e.code}: {body[:300]}")
 
 
 def main():
+    """Bootstrap OpenMetadata: create the Iceberg service and both ingestion pipelines."""
     print("=== OpenMetadata Ingestion Pipeline Setup ===")
     print(f"    Target service: {SERVICE_NAME}")
 
     print("\n[1] Logging in...")
-    token = login()
+    token = get_auth_token()
     print(f"    Token OK: {token[:25]}...")
 
     print(f"\n[2] Getting or creating service '{SERVICE_NAME}'...")
-    svc_id = get_or_create_service(token)
+    service_id = get_or_create_service(token)
 
     print("\n[3] Creating/updating metadata pipeline...")
     create_or_update_pipeline(
         token,
-        svc_id,
+        service_id,
         "metadata",
         f"{SERVICE_NAME}_metadata",
         {
@@ -166,15 +171,15 @@ def main():
     print("\n[4] Creating/updating dbt pipeline...")
     create_or_update_pipeline(
         token,
-        svc_id,
+        service_id,
         "dbt",
         f"{SERVICE_NAME}_dbt",
         {
             "type": "DBT",
             "dbtConfigSource": {
-                "dbtCatalogFilePath": "/opt/dbt/nessie_transform/target/catalog.json",
-                "dbtManifestFilePath": "/opt/dbt/nessie_transform/target/manifest.json",
-                "dbtRunResultsFilePath": "/opt/dbt/nessie_transform/target/run_results.json",
+                "dbtCatalogFilePath": "/opt/dbt/dbt_iceberg/target/catalog.json",
+                "dbtManifestFilePath": "/opt/dbt/dbt_iceberg/target/manifest.json",
+                "dbtRunResultsFilePath": "/opt/dbt/dbt_iceberg/target/run_results.json",
             },
             "dbtUpdateDescriptions": True,
             "dbtUpdateOwners": True,

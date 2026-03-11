@@ -1,4 +1,4 @@
-name: nessie_transform
+name: dbt_iceberg
 version: "1.0.0"
 config-version: 2
 
@@ -11,7 +11,7 @@ target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
 models:
-  nessie_transform:
+  dbt_iceberg:
     staging:
       +materialized: table
       +file_format: iceberg

@@ -10,8 +10,6 @@
         minio:
           condition: service_started
       volumes:
-        - ./warehouse:/home/iceberg/warehouse
-        - ./notebooks:/home/iceberg/notebooks/notebooks
         - ./spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
       environment:
         - AWS_ACCESS_KEY_ID=admin
@@ -21,6 +19,8 @@
         - 8888:8888
         - 10000:10000
         - 10001:10001
+#      command: >
+#        bash -c "/opt/spark/sbin/start-thriftserver.sh && jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root"
 #    rest:
 #      image: apache/iceberg-rest-fixture
 #      container_name: iceberg-rest
@@ -45,6 +45,8 @@
         POSTGRES_DB: metastore_db
         POSTGRES_USER: hive
         POSTGRES_PASSWORD: hive
+      ports:
+        - "5432:5432"
       volumes:
         - hive_postgres:/var/lib/postgresql/data
       healthcheck:
@@ -59,6 +61,8 @@
       container_name: hive-metastore
       networks:
         iceberg_net:
+          aliases:
+            - hivemeta
       depends_on:
         hive-postgres:
           condition: service_healthy
@@ -117,8 +121,6 @@
         /usr/bin/mc rm -r --force minio/warehouse;
         /usr/bin/mc mb minio/warehouse;
         /usr/bin/mc policy set public minio/warehouse;
-        /usr/bin/mc mb --ignore-existing minio/nessie;
-        /usr/bin/mc policy set public minio/nessie;
         "
   
     openmetadata-mysql:
@@ -187,7 +189,7 @@
         PIPELINE_SERVICE_CLIENT_CLASS_NAME: org.openmetadata.service.clients.pipeline.airflow.AirflowRESTClient
         ELASTICSEARCH_RECREATE_INDEX: "true"
         SEARCH_TYPE: "elasticsearch"
-        OM_MAX_FRAME_SIZE: "10485760"
+#        OM_MAX_FRAME_SIZE: "10485760"
         SERVER_HOST_API_URL: http://openmetadata:8585/api
         AUTHENTICATION_PROVIDER: "basic"
         AUTHENTICATION_ENABLED: "true"
@@ -255,7 +257,7 @@
         - ./om-metadata-ingestion.yaml:/tmp/om-metadata-ingestion.yaml
         - ./om-dbt-ingestion.yaml:/tmp/om-dbt-ingestion.yaml
         - ./dbt-airflow-dag.py:/opt/airflow/dags/dbt_hive_transform_lineage.py
-        - ./dbt:/opt/dbt/nessie_transform
+        - ./dbt:/opt/dbt/dbt_iceberg
         - ./om_create_pipelines.py:/opt/om_create_pipelines.py
         - airflow-dag-configs:/opt/airflow/dag_generated_configs
         - ./om-metadata-ingestion.yaml:/tmp/om-metadata-ingestion.yaml
@@ -270,24 +272,25 @@
         airflow db migrate &&
         airflow standalone
         "
-#    dremio:
-#      image: dremio/dremio-oss:latest
-#      container_name: dremio
-#      networks:
-#        iceberg_net:
-#      ports:
-#        - "9047:9047"
-#        - "31010:31010"
-#        - "45678:45678"
-#      volumes:
-#        - dremio-data:/opt/dremio/data
-#      environment:
-#        - DREMIO_MAX_MEMORY_SIZE_MB=4096
-#      healthcheck:
-#        test: [ "CMD", "curl", "-f", "http://localhost:9047" ]
-#        interval: 30s
-#        timeout: 10s
-#        retries: 10
+    dremio:
+      image: dremio/dremio-oss:latest
+      container_name: dremio
+      networks:
+        iceberg_net:
+      ports:
+        - "9047:9047"
+        - "31010:31010"
+        - "32010:32010"
+        - "45678:45678"
+      volumes:
+        - dremio-data:/opt/dremio/data
+      environment:
+        - DREMIO_MAX_MEMORY_SIZE_MB=4096
+      healthcheck:
+        test: [ "CMD", "curl", "-f", "http://localhost:9047" ]
+        interval: 30s
+        timeout: 10s
+        retries: 10
   
 #    cube:
 #      image: cubejs/cube:latest
@@ -335,10 +338,11 @@
     openmetadata_mysql:
     openmetadata_es:
     airflow-dags:
-#    dremio-data:
+    dremio-data:
     hive-warehouse:
     hive_postgres:
     airflow-dag-configs:
 
   networks:
     iceberg_net:
+      name: iceberg-net

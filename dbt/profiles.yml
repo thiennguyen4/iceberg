@@ -7,6 +7,7 @@ hive_spark:
       host: spark-iceberg
       port: 10000
       schema: default
+#      schema: ""
       threads: 2
       connect_timeout: 60
       connect_retries: 3
